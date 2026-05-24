@@ -883,13 +883,13 @@ body {
     display: block;
 }
 
-    #splash-screen {
+    #splash-screen, #exit-screen {
     position: fixed;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
-    background: url('https://h.top4top.io/p_3784nirj21.png') center / cover no-repeat fixed; /* مطابقة لخلفية الموقع تماماً */
+    background: url('https://h.top4top.io/p_3784nirj21.png') center / cover no-repeat fixed;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -898,9 +898,34 @@ body {
     font-family: 'Noto Naskh Arabic', serif;
 }
 
-#splash-screen.hidden {
+#exit-screen {
+    z-index: 2000001; /* فوق كل شيء */
+}
+
+#splash-screen.hidden, #exit-screen.hidden {
     opacity: 0;
     visibility: hidden;
+}
+
+.exit-content {
+    text-align: center;
+    color: #fff;
+    animation: fadeInSplash 0.8s ease-out;
+}
+
+.exit-title {
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--primary);
+    margin-bottom: 15px;
+    font-family: 'Amiri', serif;
+}
+
+.exit-subtitle {
+    font-size: 20px;
+    color: #fff;
+    opacity: 0.9;
+    font-family: 'Noto Naskh Arabic', serif;
 }
 
 .splash-content {
@@ -1010,6 +1035,13 @@ body {
             <div class="splash-welcome">كربلاء ميديا ترحب بكم</div>
             <img src="https://yt3.ggpht.com/xl-wmSbAljE_4-xHiZNwDNm2wtiZhaslTGgzYLQncuvJL3_AjUWPb1iAsGH64I3lBpZHzF4F=s88-c-k-c0x00ffffff-no-rj" alt="Author" class="splash-author-img">
             <div class="splash-credits">مع تحيات حيدر الاعرجي</div>
+        </div>
+    </div>
+
+    <div id="exit-screen" class="hidden">
+        <div class="exit-content">
+            <div class="exit-title">إلى اللقاء</div>
+            <div class="exit-subtitle">ونسألكم الدعاء</div>
         </div>
     </div>
     <script>
@@ -1352,6 +1384,14 @@ window.addEventListener('popstate', (event) => {
         document.body.classList.remove('player-open');
         document.body.style.overflow = '';
         currentChannelId = null;
+        pushState();
+        return;
+    }
+
+    // إذا كنا في الصفحة الرئيسية وضغط المستخدم رجوع، نظهر شاشة النهاية
+    if (!currentStack.length && !currentChannelId) {
+        showExitScreen();
+        return;
     }
 
     // استعادة الحالة بناءً على الـ state أو الـ Hash
@@ -1376,6 +1416,25 @@ window.addEventListener('popstate', (event) => {
         if (channel) selectChannel(channel, false);
     }
 });
+
+function showExitScreen() {
+    const exitScreen = document.getElementById('exit-screen');
+    if (exitScreen) {
+        exitScreen.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+        
+        // إغلاق الموقع فعلياً بعد 3 ثوانٍ (للتطبيقات المحولة أو المتصفحات التي تدعم ذلك)
+        setTimeout(() => {
+            if (window.Android) {
+                window.Android.exitApp();
+            } else {
+                // محاولة إغلاق النافذة في المتصفح
+                window.close();
+                // إذا لم تنجح (بسبب قيود المتصفح)، نبقى في شاشة النهاية
+            }
+        }, 3000);
+    }
+}
 
 function applyViewMode() {
     const homeNav = $('homeNav');
@@ -1721,6 +1780,46 @@ function initializePlayerJS(url) {
     }
 }
 
+function cleanupAllPlayers() {
+    currentPlayerEngine = null;
+    
+    // 1. إيقاف وتنظيف جميع عناصر الفيديو (Video.js, HLS, HTML5)
+    const videoElements = document.querySelectorAll('video');
+    videoElements.forEach(video => {
+        try {
+            video.pause();
+            video.removeAttribute('src');
+            video.load();
+            video.muted = true;
+        } catch (e) {}
+    });
+
+    // 2. إيقاف وتنظيف جميع الـ iframe (YouTube وغيره) لضمان انقطاع الصوت
+    const allIframes = document.querySelectorAll('iframe');
+    allIframes.forEach(iframe => {
+        try {
+            if (iframe.id !== 'externalLinkIframe') {
+                iframe.src = '';
+            }
+        } catch (e) {}
+    });
+
+    // 3. تدمير كائنات المشغلات البرمجية
+    if (videojsInstance) { try { videojsInstance.dispose(); } catch(e){} videojsInstance = null; }
+    if (hlsjsInstance) { try { hlsjsInstance.destroy(); } catch(e){} hlsjsInstance = null; }
+    if (shakaPlayerInstance) { try { shakaPlayerInstance.destroy(); } catch(e){} shakaPlayerInstance = null; }
+    if (dashjsInstance) { try { dashjsInstance.reset(); } catch(e){} dashjsInstance = null; }
+    if (clapprInstance) { try { clapprInstance.destroy(); } catch(e){} clapprInstance = null; }
+    if (plyrInstance) { try { plyrInstance.destroy(); } catch(e){} plyrInstance = null; }
+    if (nativePlayerInstance && typeof nativePlayerInstance.destroy === 'function') {
+        try { nativePlayerInstance.destroy(); } catch(e){}
+    }
+    nativePlayerInstance = null;
+
+    cleanupNativePlayer();
+    cleanupPlayerJS();
+}
+
 function showActivePlayer(engine) {
     cleanupAllPlayers();
     let id = '';
@@ -1967,25 +2066,6 @@ function hidePlayer() {
     if (errorMsg) errorMsg.classList.add('hidden');
     document.body.classList.remove('player-open');
     document.body.style.overflow = '';
-
-    const videoElements = document.querySelectorAll('video');
-    videoElements.forEach(video => {
-        try {
-            video.pause();
-            video.muted = true;
-            video.volume = 0;
-            video.currentTime = 0;
-        } catch (e) {}
-    });
-
-    const iframes = document.querySelectorAll('iframe');
-    iframes.forEach(iframe => {
-        try {
-            if (iframe.src && (iframe.src.includes('youtube.com') || iframe.src.includes('youtu.be'))) {
-                iframe.src = '';
-            }
-        } catch (e) {}
-    });
 
     if (document.fullscreenElement) {
         document.exitFullscreen().catch(err => console.log("Exit fullscreen failed:", err));
