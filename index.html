@@ -881,7 +881,78 @@ body {
     display: block;
 }
 
-    </style>
+    #splash-screen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: #071824;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000000;
+    transition: opacity 0.6s cubic-bezier(0.4, 0, 0.2, 1), visibility 0.6s;
+}
+
+#splash-screen.hidden {
+    opacity: 0;
+    visibility: hidden;
+}
+
+.splash-content {
+    text-align: center;
+    color: #fff;
+    animation: fadeInSplash 0.8s ease-out;
+}
+
+@keyframes fadeInSplash {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.splash-logo {
+    width: 140px;
+    height: 140px;
+    border-radius: 50%;
+    margin-bottom: 25px;
+    border: 4px solid var(--primary);
+    padding: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    box-shadow: 0 0 30px rgba(255, 102, 0, 0.2);
+}
+
+.splash-title {
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 40px;
+    letter-spacing: 1px;
+}
+
+.enter-btn {
+    padding: 14px 50px;
+    font-size: 20px;
+    font-weight: 700;
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    border-radius: 35px;
+    cursor: pointer;
+    box-shadow: 0 6px 20px rgba(255, 102, 0, 0.4);
+    transition: all 0.3s ease;
+    font-family: 'Cairo', sans-serif;
+}
+
+.enter-btn:hover {
+    background: #e65c00;
+    transform: translateY(-3px);
+    box-shadow: 0 8px 25px rgba(255, 102, 0, 0.5);
+}
+
+.enter-btn:active {
+    transform: translateY(-1px);
+}
+</style>
     <link href="https://vjs.zencdn.net/8.10.0/video-js.css" rel="stylesheet" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" integrity="sha512-iecdLmaskl7CVkqkXNQ/ZH/XLlvWZOJyj7Yy7tcenmpD1ypASozpmT/E0iPtmFIB46ZmdtAc9eNBvH0H/ZpiBw==" crossorigin="anonymous" referrerpolicy="no-referrer" />
     <link rel="manifest" href='data:application/manifest+json,{"name":"كربلاء ميديا","short_name":"كربلاء","description":"تطبيق ويب لبث وتشغيل المحتوى.","start_url":".","scope":".","display":"standalone","background_color":"#000000","theme_color":"#000000","icons":[{"src":"./icons/icon-192.png","sizes":"192x192","type":"image/png"},{"src":"./icons/icon-512.png","sizes":"512x512","type":"image/png"}]}' />
@@ -893,6 +964,13 @@ body {
     <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
 </head>
 <body>
+    <div id="splash-screen">
+        <div class="splash-content">
+            <img src="https://l.top4top.io/p_3796vjfkd1.png" alt="Logo" class="splash-logo">
+            <div class="splash-title">كربلاء ميديا</div>
+            <button onclick="enterSite()" class="enter-btn">دخول الموقع</button>
+        </div>
+    </div>
     <script>
         if (window.location.hash && window.location.hash.includes('|')) {
             document.body.classList.add('player-open');
@@ -1225,87 +1303,33 @@ function toast(message, duration = 2600) {
 }
 
 window.addEventListener('popstate', (event) => {
-    const homeNav = $('homeNav');
-    const matchesNav = $('matchesNav');
-
+    // إذا كان المشغل مفتوحاً، نغلقه
     if ($('playerContainer') && !$('playerContainer').classList.contains('hidden')) {
-        hidePlayer();
-        
-        if (event.state && (event.state.stack || event.state.stack === [])) {
-            currentStack = event.state.stack || [];
-            currentChannelId = event.state.channelId || null;
-            window.currentViewMode = event.state.viewMode || 'home';
-            window.currentExternalUrl = event.state.externalUrl || '';
-            applyViewMode();
-            renderCurrentView();
-            if (currentChannelId) {
-                const channel = channelsCache.find(ch => ch.id === currentChannelId);
-                if (channel) selectChannel(channel, false);
-            }
-        } else {
-            const hashState = restoreHashState();
-            if (hashState.stack.length > 0 || hashState.channelId) {
-                currentStack = hashState.stack;
-                currentChannelId = hashState.channelId;
-                window.currentViewMode = hashState.viewMode;
-                window.currentExternalUrl = hashState.externalUrl || '';
-                applyViewMode();
-                renderCurrentView();
-                if (currentChannelId) {
-                    const channel = channelsCache.find(ch => ch.id === currentChannelId);
-                    if (channel) selectChannel(channel, false);
-                }
-            } else {
-                currentStack = [];
-                currentChannelId = null;
-                window.currentViewMode = 'home';
-                window.currentExternalUrl = '';
-                applyViewMode();
-                renderCurrentView();
-            }
-        }
-        return;
+        cleanupAllPlayers();
+        $('playerContainer').classList.add('hidden');
+        if ($('player-error-msg')) $('player-error-msg').classList.add('hidden');
+        document.body.classList.remove('player-open');
+        document.body.style.overflow = '';
+        currentChannelId = null;
     }
 
-    if ((window.currentViewMode === 'matchesTable' || window.currentViewMode === 'externalLink') && !event.state) {
-        window.currentViewMode = 'home';
-        window.currentExternalUrl = '';
-        if ($('grid')) $('grid').classList.remove('hidden');
-        if ($('matchesTableContainer')) $('matchesTableContainer').classList.add('hidden');
-        if ($('externalLinkContainer')) $('externalLinkContainer').classList.add('hidden');
-        if (homeNav) homeNav.classList.add('active');
-        if (matchesNav) matchesNav.classList.remove('active');
-        window.history.replaceState({
-            path: 'navigation',
-            stack: [],
-            channelId: null,
-            viewMode: 'home',
-            externalUrl: ''
-        }, '', `${window.location.pathname}${window.location.search}`);
-        return;
-    }
-
+    // استعادة الحالة بناءً على الـ state أو الـ Hash
     if (event.state && Array.isArray(event.state.stack)) {
         currentStack = event.state.stack;
         currentChannelId = event.state.channelId || null;
         window.currentViewMode = event.state.viewMode || 'home';
         window.currentExternalUrl = event.state.externalUrl || '';
-        applyViewMode();
-        renderCurrentView();
-        if (currentChannelId) {
-            const channel = channelsCache.find(ch => ch.id === currentChannelId);
-            if (channel) selectChannel(channel, false);
-        }
-        return;
+    } else {
+        const hashState = restoreHashState();
+        currentStack = hashState.stack || [];
+        currentChannelId = hashState.channelId || null;
+        window.currentViewMode = hashState.viewMode || 'home';
+        window.currentExternalUrl = hashState.externalUrl || '';
     }
-
-    const hashState = restoreHashState();
-    currentStack = hashState.stack;
-    currentChannelId = hashState.channelId;
-    window.currentViewMode = hashState.viewMode;
-    window.currentExternalUrl = hashState.externalUrl || '';
+    
     applyViewMode();
     renderCurrentView();
+    
     if (currentChannelId) {
         const channel = channelsCache.find(ch => ch.id === currentChannelId);
         if (channel) selectChannel(channel, false);
@@ -1315,44 +1339,50 @@ window.addEventListener('popstate', (event) => {
 function applyViewMode() {
     const homeNav = $('homeNav');
     const matchesNav = $('matchesNav');
+    const grid = $('grid');
+    const matchesGrid = $('matchesGrid');
+    const matchesTableContainer = $('matchesTableContainer');
+    const externalLinkContainer = $('externalLinkContainer');
+    const playerContainer = $('playerContainer');
     
-    if (currentChannelId) {
-        $('playerContainer').classList.remove('hidden');
+    if (currentChannelId && playerContainer) {
+        playerContainer.classList.remove('hidden');
         document.body.classList.add('player-open');
-    } else {
-        $('playerContainer').classList.add('hidden');
+    } else if (playerContainer) {
+        playerContainer.classList.add('hidden');
         document.body.classList.remove('player-open');
     }
 
     if (window.currentViewMode === 'matches') {
-        if ($('grid')) $('grid').classList.add('hidden');
-        if ($('matchesGrid')) $('matchesGrid').classList.remove('hidden');
-        if ($('matchesTableContainer')) $('matchesTableContainer').classList.add('hidden');
-        if ($('externalLinkContainer')) $('externalLinkContainer').classList.add('hidden');
+        if (grid) grid.classList.add('hidden');
+        if (matchesGrid) matchesGrid.classList.remove('hidden');
+        if (matchesTableContainer) matchesTableContainer.classList.add('hidden');
+        if (externalLinkContainer) externalLinkContainer.classList.add('hidden');
         if (matchesNav) matchesNav.classList.add('active');
         if (homeNav) homeNav.classList.remove('active');
     } else if (window.currentViewMode === 'matchesTable') {
-        if ($('grid')) $('grid').classList.add('hidden');
-        if ($('matchesGrid')) $('matchesGrid').classList.add('hidden');
-        if ($('matchesTableContainer')) $('matchesTableContainer').classList.remove('hidden');
-        if ($('externalLinkContainer')) $('externalLinkContainer').classList.add('hidden');
+        if (grid) grid.classList.add('hidden');
+        if (matchesGrid) matchesGrid.classList.add('hidden');
+        if (matchesTableContainer) matchesTableContainer.classList.remove('hidden');
+        if (externalLinkContainer) externalLinkContainer.classList.add('hidden');
         if (matchesNav) matchesNav.classList.add('active');
         if (homeNav) homeNav.classList.remove('active');
     } else if (window.currentViewMode === 'externalLink') {
-        if ($('grid')) $('grid').classList.add('hidden');
-        if ($('matchesGrid')) $('matchesGrid').classList.add('hidden');
-        if ($('matchesTableContainer')) $('matchesTableContainer').classList.add('hidden');
-        if ($('externalLinkContainer')) {
-            $('externalLinkContainer').classList.remove('hidden');
-            if ($('externalLinkIframe')) $('externalLinkIframe').src = window.currentExternalUrl;
+        if (grid) grid.classList.add('hidden');
+        if (matchesGrid) matchesGrid.classList.add('hidden');
+        if (matchesTableContainer) matchesTableContainer.classList.add('hidden');
+        if (externalLinkContainer) {
+            externalLinkContainer.classList.remove('hidden');
+            const iframe = $('externalLinkIframe');
+            if (iframe) iframe.src = window.currentExternalUrl;
         }
         if (homeNav) homeNav.classList.add('active');
         if (matchesNav) matchesNav.classList.remove('active');
     } else {
-        if ($('grid')) $('grid').classList.remove('hidden');
-        if ($('matchesGrid')) $('matchesGrid').classList.add('hidden');
-        if ($('matchesTableContainer')) $('matchesTableContainer').classList.add('hidden');
-        if ($('externalLinkContainer')) $('externalLinkContainer').classList.add('hidden');
+        if (grid) grid.classList.remove('hidden');
+        if (matchesGrid) matchesGrid.classList.add('hidden');
+        if (matchesTableContainer) matchesTableContainer.classList.add('hidden');
+        if (externalLinkContainer) externalLinkContainer.classList.add('hidden');
         if (homeNav) homeNav.classList.add('active');
         if (matchesNav) matchesNav.classList.remove('active');
     }
@@ -1374,13 +1404,25 @@ function buildHash(stack, channelId) {
 function pushState() {
     const hash = buildHash(currentStack, currentChannelId);
     const url = `${window.location.pathname}${window.location.search}${hash ? `#${hash}` : ''}`;
-    window.history.pushState({ 
-        path: 'navigation', 
-        stack: [...currentStack], 
-        channelId: currentChannelId,
-        viewMode: window.currentViewMode,
-        externalUrl: window.currentExternalUrl 
-    }, '', url);
+    
+    // إذا كان نفس الرابط الحالي، لا داعي لإضافته للتاريخ لتجنب التكرار
+    if (window.location.hash === (hash ? `#${hash}` : '')) {
+        window.history.replaceState({ 
+            path: 'navigation', 
+            stack: [...currentStack], 
+            channelId: currentChannelId, 
+            viewMode: window.currentViewMode, 
+            externalUrl: window.currentExternalUrl 
+        }, '', url);
+    } else {
+        window.history.pushState({ 
+            path: 'navigation', 
+            stack: [...currentStack], 
+            channelId: currentChannelId, 
+            viewMode: window.currentViewMode, 
+            externalUrl: window.currentExternalUrl 
+        }, '', url);
+    }
 }
 
 function restoreHashState() {
@@ -1915,6 +1957,9 @@ function hidePlayer() {
     currentPlayerEngine = null;
     currentChannelLinks = [];
     currentQualitySources = [];
+    
+    // عند إغلاق المشغل يدوياً (بالضغط على X)، نحدث الرابط ليعود للقسم
+    pushState();
 }
 
 async function selectChannel(channel, pushHistory = true) {
@@ -1929,7 +1974,10 @@ async function selectChannel(channel, pushHistory = true) {
     currentQualityIndex = 0;
     currentQualityMode = 'links';
     setupQualityButtons(links, 'links');
+    
+    // عند فتح القناة، نحافظ على وجود المستخدم في القسم الحالي
     showPlayer(pushHistory);
+    
     // Smart play: prefer YouTube, then m3u8, then mp4, else fallback to trying engines in parallel
     playSmart(links);
 }
@@ -1974,46 +2022,78 @@ function playSmart(links) {
 async function renderCurrentView() {
     const grid = $('grid');
     if (!grid) return;
-    const currentId = currentStack.length ? currentStack[currentStack.length - 1] : null;
     
-    const scrollPos = window.scrollY;
+    // 1. تحديد المعرف الحالي بدقة
+    let currentId = (currentStack && currentStack.length > 0) ? String(currentStack[currentStack.length - 1]) : null;
     
-    grid.innerHTML = '';
-    if (!currentId) {
-        const roots = Object.values(categoriesCache).filter(c => !c.parentId || !categoriesCache[c.parentId]);
-        if (!roots.length) {
-            grid.innerHTML = '<div class="empty-section-msg">لا توجد أقسام مضافة بعد</div>';
-            return;
-        }
-        roots.forEach(cat => {
+    // تنظيف المعرف من القيم الوهمية
+    if (!currentId || currentId === "" || currentId === "null" || currentId === "undefined" || currentId === "0") {
+        currentId = null;
+    }
+
+    // تصفير الشبكة قبل العرض
+    grid.innerHTML = ''; 
+
+    // التأكد من وجود بيانات
+    const allCategories = Object.values(categoriesCache || {});
+    if (allCategories.length === 0) {
+        grid.innerHTML = '<div class="empty-section-msg">جاري تحميل البيانات من قاعدة البيانات...</div>';
+        return;
+    }
+
+    // --- الصفحة الرئيسية ---
+    if (currentId === null) {
+        // فلترة الأقسام الرئيسية (التي ليس لها أب أو أبوه غير موجود في القائمة)
+        let roots = allCategories.filter(c => {
+            const pid = normalizeParentId(c.parentId);
+            return !pid || pid === "" || !categoriesCache[pid];
+        });
+
+        // إذا لم نجد جذوراً محددة، نعرض جميع الأقسام المتاحة لضمان عدم بقاء الصفحة فارغة
+        const toDisplay = roots.length > 0 ? roots : allCategories;
+
+        toDisplay.forEach(cat => {
             const card = document.createElement('div');
             card.className = 'card';
             card.innerHTML = `<img src="${cat.img || DEFAULT_IMAGE}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${cat.name}</div>`;
             card.onclick = () => {
-                if (cat.link) { window.currentViewMode = 'externalLink'; window.currentExternalUrl = cat.link; applyViewMode(); pushState(); return; }
-                currentStack.push(cat.id); pushState(); renderCurrentView();
+                if (cat.link) {
+                    window.currentViewMode = 'externalLink';
+                    window.currentExternalUrl = cat.link;
+                    applyViewMode();
+                    pushState();
+                    return;
+                }
+                currentStack.push(String(cat.id));
+                pushState();
+                renderCurrentView();
             };
             grid.appendChild(card);
         });
-        window.scrollTo(0, scrollPos);
         return;
     }
-    const subs = Object.values(categoriesCache).filter(c => c.parentId === currentId);
+
+    // --- داخل قسم معين ---
+    // 1. الأقسام الفرعية التابعة لهذا القسم
+    const subs = allCategories.filter(c => normalizeParentId(c.parentId) === String(currentId));
     subs.forEach(sub => {
         const card = document.createElement('div');
         card.className = 'card';
         card.innerHTML = `<img src="${sub.img || DEFAULT_IMAGE}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${sub.name}</div>`;
         card.onclick = () => {
-            if (sub.link) { window.currentViewMode = 'externalLink'; window.currentExternalUrl = sub.link; applyViewMode(); pushState(); return; }
-            currentStack.push(sub.id); pushState(); renderCurrentView();
+            currentStack.push(String(sub.id));
+            pushState();
+            renderCurrentView();
         };
         grid.appendChild(card);
     });
-    const channels = channelsCache.filter(ch => getChannelCategoryIds(ch).includes(currentId));
-    if (!channels.length && !subs.length) {
-        grid.innerHTML = '<div class="empty-section-msg">عذراً، لا توجد محتويات في هذا القسم حالياً</div>';
-        return;
-    }
+
+    // 2. القنوات التابعة لهذا القسم
+    const channels = (channelsCache || []).filter(ch => {
+        const cids = getChannelCategoryIds(ch);
+        return cids.includes(String(currentId));
+    });
+
     channels.forEach(ch => {
         const card = document.createElement('div');
         card.className = 'card';
@@ -2021,7 +2101,10 @@ async function renderCurrentView() {
         card.onclick = () => selectChannel(ch);
         grid.appendChild(card);
     });
-    window.scrollTo(0, scrollPos);
+
+    if (subs.length === 0 && channels.length === 0) {
+        grid.innerHTML = '<div class="empty-section-msg">عذراً، هذا القسم لا يحتوي على محتوى حالياً</div>';
+    }
 }
 
 function performSearch(query) {
@@ -2157,32 +2240,39 @@ async function init() {
     if (appInitialized) return;
     appInitialized = true;
     initVideoPlayer();
+    
+    // تهيئة الحالة الأولية لمنع الخروج المفاجئ
+    if (!window.history.state) {
+        window.history.replaceState({ path: 'navigation', stack: [], channelId: null, viewMode: 'home', externalUrl: '' }, '', window.location.href);
+    }
+
     currentStack = [];
+    
+    // 1. تحميل البيانات الأولية مرة واحدة والانتظار
     await Promise.all([refreshCategoriesCache(), refreshChannelsCache()]);
+    
+    // 2. استعادة الحالة من الرابط (Hash)
     const hashState = restoreHashState();
-    currentStack = hashState.stack;
-    currentChannelId = hashState.channelId;
-    window.currentViewMode = hashState.viewMode;
+    currentStack = hashState.stack || [];
+    currentChannelId = hashState.channelId || null;
+    window.currentViewMode = hashState.viewMode || 'home';
+    window.currentExternalUrl = hashState.externalUrl || '';
+
     if (currentChannelId && !channelsCache.some(ch => ch.id === currentChannelId)) {
         currentChannelId = null;
     }
+
+    // 3. تطبيق العرض الأولي
     applyViewMode();
     await renderCurrentView();
 
-    const grid = $('grid');
-    const isEmptyCategoryView = !currentChannelId && grid && grid.children.length === 1 && grid.children[0].classList.contains('empty-section-msg');
-    if (currentStack.length && isEmptyCategoryView) {
-        currentStack = [];
-        window.currentViewMode = 'home';
-        window.history.replaceState({ path: 'navigation', stack: [], channelId: null, viewMode: 'home', externalUrl: '' }, '', `${window.location.pathname}${window.location.search}`);
-        applyViewMode();
-        await renderCurrentView();
-    }
-
+    // 4. تشغيل القناة إذا كانت موجودة في الرابط
     if (currentChannelId) {
         const channel = channelsCache.find(ch => ch.id === currentChannelId);
         if (channel) await selectChannel(channel, false);
     }
+
+    // 5. تفعيل التحديثات التلقائية (Real-time Sync)
     database.ref('categories').on('value', (snapshot) => {
         const map = {};
         snapshot.forEach(c => {
@@ -2193,13 +2283,14 @@ async function init() {
             };
         });
         categoriesCache = map;
-        renderCurrentView();
+        renderCurrentView(); // تحديث الواجهة فوراً عند تغير البيانات
     });
+
     database.ref('channels').on('value', (snapshot) => {
         const list = [];
         snapshot.forEach(ch => { list.push({ id: ch.key, ...ch.val() }); });
         channelsCache = list;
-        renderCurrentView();
+        renderCurrentView(); // تحديث الواجهة فوراً عند تغير البيانات
     });
 }
 
