@@ -1461,7 +1461,7 @@ window.addEventListener('popstate', (event) => {
     // إيقاف المشغلات فوراً لضمان توقف الصوت
     cleanupAllPlayers();
 
-    // استعادة الحالة
+    // استعادة الحالة من الـ state أو الـ Hash
     const state = event.state || restoreHashState();
     
     // تحديث المتغيرات العالمية من الحالة المستعادة
@@ -1470,18 +1470,25 @@ window.addEventListener('popstate', (event) => {
     window.currentViewMode = state.viewMode || 'home';
     window.currentExternalUrl = state.externalUrl || '';
 
-    // تحديث الواجهة
+    // إخفاء حاوية المشغل يدوياً لضمان الاستجابة السريعة
+    if (!currentChannelId) {
+        const pc = $('playerContainer');
+        if (pc) pc.classList.add('hidden');
+        document.body.classList.remove('player-open');
+        document.body.style.overflow = '';
+    }
+
+    // تحديث الواجهة فوراً
     applyViewMode();
     renderCurrentView();
     
-    // تشغيل القناة إذا كانت موجودة في الحالة
+    // تشغيل القناة إذا كانت الحالة تتضمن قناة
     if (currentChannelId) {
         const channel = channelsCache.find(ch => ch.id === currentChannelId);
         if (channel) selectChannel(channel, false);
     }
 
-    // شاشة الخروج: تظهر فقط إذا كان المستخدم في الصفحة الرئيسية وحاول الرجوع
-    // نتحقق من ذلك عبر التأكد من أننا في الجذر ولا يوجد state (أي وصلنا لبداية التاريخ)
+    // منطق شاشة الخروج: تظهر فقط إذا كنا في الجذر وحاول المستخدم الرجوع
     if (!event.state && currentStack.length === 0 && !currentChannelId && window.currentViewMode === 'home') {
         if (window.history.length > 1) {
             showExitScreen();
