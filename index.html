@@ -1403,32 +1403,38 @@ window.addEventListener('popstate', (event) => {
     // تنظيف المشغلات لضمان توقف الصوت تماماً عند الرجوع
     cleanupAllPlayers();
 
-    // استعادة الحالة بناءً على الـ state أو الـ Hash
+    // استعادة الحالة من الـ state أو الـ Hash
     let state = event.state;
     if (!state) {
         state = restoreHashState();
     }
     
-    currentStack = state.stack || [];
+    // تحديث المتغيرات العالمية
+    currentStack = Array.isArray(state.stack) ? [...state.stack] : [];
     currentChannelId = state.channelId || null;
     window.currentViewMode = state.viewMode || 'home';
     window.currentExternalUrl = state.externalUrl || '';
 
-    // التحقق من الوصول للحالة الأولية
-    const isAtRoot = !currentStack.length && !currentChannelId && window.currentViewMode === 'home';
-    
-    // إذا لم يكن هناك state في الحدث (يعني المستخدم ضغط رجوع من أول صفحة في التطبيق)
-    if (!event.state && isAtRoot) {
-        showExitScreen();
-        return;
-    }
-    
+    // تطبيق العرض بناءً على الحالة المستعادة
     applyViewMode();
     renderCurrentView();
     
+    // إذا كانت الحالة تتضمن قناة، قم بتشغيلها
     if (currentChannelId) {
         const channel = channelsCache.find(ch => ch.id === currentChannelId);
         if (channel) selectChannel(channel, false);
+    }
+
+    // منطق الخروج: إذا وصلنا للحالة الصفرية تماماً وضغط المستخدم رجوع مرة أخرى
+    // نترك للمتصفح التعامل مع الخروج أو نظهر شاشة النهاية إذا كان لا يوجد state إطلاقاً
+    if (!event.state && currentStack.length === 0 && !currentChannelId && window.currentViewMode === 'home') {
+        // نتحقق من وجود "بصمة" في التاريخ، إذا كانت هذه أول صفحة فعلاً
+        if (window.history.length <= 1) {
+            // لا نفعل شيء، نترك المستخدم في الصفحة الرئيسية
+        } else {
+            // إذا كان المستخدم يحاول الخروج من التطبيق
+            showExitScreen();
+        }
     }
 });
 
