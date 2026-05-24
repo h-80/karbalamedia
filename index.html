@@ -2017,21 +2017,20 @@ function setPlayerSource(url, engine = 'videojs', resetFallbacks = true) {
                     showActivePlayer('youtube');
                     const iframe = $('youtube-iframe');
                     if (iframe) {
-                        // convert common youtube links to embed URL
                         const id = (function extractYouTubeID(u){
                             try {
                                 const urlObj = new URL(u);
                                 if (urlObj.hostname.includes('youtu.be')) return urlObj.pathname.slice(1);
                                 if (urlObj.hostname.includes('youtube.com')) return urlObj.searchParams.get('v');
                             } catch(e) {}
-                            // fallback: try regex
                             const m = u.match(/(?:v=|\/)([0-9A-Za-z_-]{11})/);
                             return m ? m[1] : null;
                         })(url);
+                        
                         if (id) {
-                            iframe.src = `https://www.youtube.com/embed/${id}?autoplay=1&rel=0&playsinline=1`;
+                            // استخدام الرابط الصحيح للتضمين مع إضافة المعلمات اللازمة لتجاوز الرفض
+                            iframe.src = `https://www.youtube.com/embed/${id}?autoplay=1&rel=0&playsinline=1&enablejsapi=1&origin=${window.location.origin}`;
                         } else {
-                            // direct embed or playlist
                             iframe.src = url;
                         }
                     }
