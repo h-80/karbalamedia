@@ -394,8 +394,6 @@ body {
     position: fixed;
     top: 0;
     left: 0;
-    right: 0;
-    bottom: 0;
     width: 100%;
     height: 100%;
     background: #000;
@@ -488,12 +486,19 @@ body {
     justify-content: center;
     gap: 10px;
     padding: 12px 16px;
-    background: rgba(17, 17, 17, 0.95);
+    background: rgba(0, 0, 0, 0.6);
     border-top: 1px solid rgba(255,255,255,0.1);
     width: 100%;
     flex-shrink: 0;
     min-height: 50px;
     z-index: 1000002;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.player-container:hover .player-engine-control,
+.player-container:active .player-engine-control {
+    opacity: 1;
 }
 
 .player-engine-control label {
@@ -510,6 +515,24 @@ body {
     color: #fff;
     font-size: 13px;
     min-width: 150px;
+}
+
+#youtube-container {
+    width: 100% !important;
+    height: 100% !important;
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    background: #000 !important;
+}
+
+#youtube-iframe {
+    width: 100% !important;
+    height: 100% !important;
+    border: none !important;
 }
 
 .video-js,
@@ -884,7 +907,7 @@ body {
     display: block;
 }
 
-    #splash-screen {
+    #splash-screen, #exit-screen {
     position: fixed;
     top: 0;
     left: 0;
@@ -899,9 +922,34 @@ body {
     font-family: 'Noto Naskh Arabic', serif;
 }
 
-#splash-screen.hidden {
+#exit-screen {
+    z-index: 2000001; /* فوق كل شيء */
+}
+
+#splash-screen.hidden, #exit-screen.hidden {
     opacity: 0;
     visibility: hidden;
+}
+
+.exit-content {
+    text-align: center;
+    color: #fff;
+    animation: fadeInSplash 0.8s ease-out;
+}
+
+.exit-title {
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--primary);
+    margin-bottom: 15px;
+    font-family: 'Amiri', serif;
+}
+
+.exit-subtitle {
+    font-size: 20px;
+    color: #fff;
+    opacity: 0.9;
+    font-family: 'Noto Naskh Arabic', serif;
 }
 
 .splash-content {
@@ -912,7 +960,7 @@ body {
 }
 
 .splash-prayer {
-    font-size: 30px;
+    font-size: clamp(20px, 5vw, 26px);
     font-weight: 700;
     color: var(--primary);
     margin-bottom: 10px;
@@ -1014,6 +1062,12 @@ body {
         </div>
     </div>
 
+    <div id="exit-screen" class="hidden">
+        <div class="exit-content">
+            <div class="exit-title">إلى اللقاء</div>
+            <div class="exit-subtitle">ونسألكم الدعاء</div>
+        </div>
+    </div>
     <script>
         if (window.location.hash && window.location.hash.includes('|')) {
             document.body.classList.add('player-open');
@@ -1052,8 +1106,8 @@ body {
             <video id="video-player" class="video-js vjs-default-skin vjs-big-play-centered" playsinline crossorigin="anonymous"></video>
             <div id="playerjs-container" class="playerjs-container hidden"></div>
             <video id="native-video" class="native-video hidden" playsinline controls crossorigin="anonymous"></video>
-            <div id="youtube-container" class="hidden" style="position:absolute;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#000;z-index:100;">
-                <iframe id="youtube-iframe" src="" frameborder="0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen style="width:100%;height:100%;border:none;display:block;"></iframe>
+            <div id="youtube-container" class="hidden" style="width:100%;height:100%;">
+                <iframe id="youtube-iframe" src="" frameborder="0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen style="width:100%;height:100%;"></iframe>
             </div>
             <div class="quality-buttons" id="qualityButtons"></div>
             <div class="quality-menu" id="qualityMenu">
@@ -1346,23 +1400,28 @@ function toast(message, duration = 2600) {
 }
 
 window.addEventListener('popstate', (event) => {
-    const state = event.state || restoreHashState();
-    
-    // إغلاق المشغل إذا لم تكن الحالة الحالية تحتوي على معرف قناة
-    if (!state.channelId && !$('playerContainer').classList.contains('hidden')) {
-        cleanupAllPlayers();
-        $('playerContainer').classList.add('hidden');
-        if ($('player-error-msg')) $('player-error-msg').classList.add('hidden');
-        document.body.classList.remove('player-open');
-        document.body.style.overflow = '';
-        currentChannelId = null;
-    }
+    // تنظيف المشغلات لضمان توقف الصوت تماماً عند الرجوع
+    cleanupAllPlayers();
 
-    // تحديث الحالة العامة
-    currentStack = Array.isArray(state.stack) ? state.stack : [];
+    // استعادة الحالة بناءً على الـ state أو الـ Hash
+    let state = event.state;
+    if (!state) {
+        state = restoreHashState();
+    }
+    
+    currentStack = state.stack || [];
     currentChannelId = state.channelId || null;
     window.currentViewMode = state.viewMode || 'home';
     window.currentExternalUrl = state.externalUrl || '';
+
+    // التحقق من الوصول للحالة الأولية
+    const isAtRoot = !currentStack.length && !currentChannelId && window.currentViewMode === 'home';
+    
+    // إذا لم يكن هناك state في الحدث (يعني المستخدم ضغط رجوع من أول صفحة في التطبيق)
+    if (!event.state && isAtRoot) {
+        showExitScreen();
+        return;
+    }
     
     applyViewMode();
     renderCurrentView();
@@ -1372,6 +1431,25 @@ window.addEventListener('popstate', (event) => {
         if (channel) selectChannel(channel, false);
     }
 });
+
+function showExitScreen() {
+    const exitScreen = document.getElementById('exit-screen');
+    if (exitScreen) {
+        exitScreen.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+        
+        // إغلاق الموقع فعلياً بعد 3 ثوانٍ (للتطبيقات المحولة أو المتصفحات التي تدعم ذلك)
+        setTimeout(() => {
+            if (window.Android) {
+                window.Android.exitApp();
+            } else {
+                // محاولة إغلاق النافذة في المتصفح
+                window.close();
+                // إذا لم تنجح (بسبب قيود المتصفح)، نبقى في شاشة النهاية
+            }
+        }, 3000);
+    }
+}
 
 function applyViewMode() {
     const homeNav = $('homeNav');
@@ -2014,6 +2092,13 @@ function hidePlayer() {
     currentPlayerEngine = null;
     currentChannelLinks = [];
     currentQualitySources = [];
+    
+    // عند إغلاق المشغل يدوياً، نحدث الحالة دون إضافة مدخل جديد في التاريخ إذا كان آخر مدخل هو المشغل
+    if (window.location.hash.includes('|')) {
+        window.history.back();
+    } else {
+        pushState();
+    }
 }
 
 async function selectChannel(channel, pushHistory = true) {
@@ -2103,7 +2188,7 @@ async function renderCurrentView() {
             return !pid || pid === "" || !categoriesCache[pid];
         });
 
-        // إذا لم نجد جذوراً محددة، نعرض جميع الأقسام المتاحة لضمان عدم بقاء الصفحة فارغة
+        // التعديل: إذا لم نجد جذوراً، نعرض كل الأقسام لضمان عدم بقاء الصفحة فارغة
         const toDisplay = roots.length > 0 ? roots : allCategories;
 
         toDisplay.forEach(cat => {
@@ -2124,6 +2209,8 @@ async function renderCurrentView() {
             };
             grid.appendChild(card);
         });
+        
+        // ننهي الدالة هنا لضمان عدم عرض أي قنوات في الصفحة الرئيسية
         return;
     }
 
@@ -2310,44 +2397,36 @@ async function init() {
     
     initVideoPlayer();
     
-    // تحميل البيانات أولاً
+    // تحميل البيانات الأولية مرة واحدة والانتظار
     await Promise.all([refreshCategoriesCache(), refreshChannelsCache()]);
-    
-    // مزامنة الحالة الأولية مع الرابط الحالي (Hash)
-    const initialState = restoreHashState();
-    const hasInitialHash = window.location.hash.length > 1;
 
-    // إذا بدأ المستخدم من صفحة فرعية، نضع حالة الصفحة الرئيسية في السجل أولاً
-    if (hasInitialHash) {
-        window.history.replaceState({ 
-            path: 'navigation', 
-            stack: [], 
-            channelId: null, 
-            viewMode: 'home', 
-            externalUrl: '' 
-        }, '', window.location.pathname + window.location.search);
-        
+    // استعادة الحالة من الرابط (Hash)
+    const hashState = restoreHashState();
+    const startAtSubPage = hashState.stack.length > 0 || hashState.channelId || hashState.viewMode !== 'home';
+
+    // تهيئة الحالة الأولية
+    // إذا بدأ المستخدم في صفحة فرعية، نضع الصفحة الرئيسية في قاع التاريخ أولاً
+    if (startAtSubPage) {
+        window.history.replaceState({ path: 'navigation', stack: [], channelId: null, viewMode: 'home', externalUrl: '' }, '', window.location.pathname);
         window.history.pushState({ 
             path: 'navigation', 
-            stack: initialState.stack || [], 
-            channelId: initialState.channelId || null, 
-            viewMode: initialState.viewMode || 'home', 
-            externalUrl: initialState.externalUrl || '' 
+            stack: hashState.stack, 
+            channelId: hashState.channelId, 
+            viewMode: hashState.viewMode, 
+            externalUrl: hashState.externalUrl 
         }, '', window.location.href);
     } else if (!window.history.state) {
-        window.history.replaceState({ 
-            path: 'navigation', 
-            stack: [], 
-            channelId: null, 
-            viewMode: 'home', 
-            externalUrl: '' 
-        }, '', window.location.href);
+        window.history.replaceState({ path: 'navigation', stack: [], channelId: null, viewMode: 'home', externalUrl: '' }, '', window.location.href);
     }
 
-    currentStack = initialState.stack || [];
-    currentChannelId = initialState.channelId || null;
-    window.currentViewMode = initialState.viewMode || 'home';
-    window.currentExternalUrl = initialState.externalUrl || '';
+    currentStack = hashState.stack || [];
+    currentChannelId = hashState.channelId || null;
+    window.currentViewMode = hashState.viewMode || 'home';
+    window.currentExternalUrl = hashState.externalUrl || '';
+
+    if (currentChannelId && !channelsCache.some(ch => ch.id === currentChannelId)) {
+        currentChannelId = null;
+    }
 
     // تطبيق العرض الأولي
     applyViewMode();
