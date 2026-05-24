@@ -1270,6 +1270,30 @@ let parallelEngineSuccessful = false;
 const FALLBACK_ORDER = ['videojs', 'hlsjs', 'playerjs', 'jwplayer', 'dplayer', 'shaka', 'dashjs', 'flowplayer', 'clappr', 'plyr', 'mediaelement', 'openplayer', 'mediachrome', 'flvjs', 'native'];
 
 function cleanupAllPlayers() {
+    currentPlayerEngine = null;
+    
+    // 1. إيقاف وتنظيف جميع عناصر الفيديو (Video.js, HLS, HTML5)
+    const videoElements = document.querySelectorAll('video');
+    videoElements.forEach(video => {
+        try {
+            video.pause();
+            video.removeAttribute('src');
+            video.load();
+            video.muted = true;
+        } catch (e) {}
+    });
+
+    // 2. إيقاف وتنظيف جميع الـ iframe (YouTube وغيره) لضمان انقطاع الصوت
+    const allIframes = document.querySelectorAll('iframe');
+    allIframes.forEach(iframe => {
+        try {
+            if (iframe.id !== 'externalLinkIframe') {
+                iframe.src = '';
+            }
+        } catch (e) {}
+    });
+
+    // 3. تدمير كائنات المشغلات البرمجية
     if (videojsInstance) { try { videojsInstance.dispose(); } catch(e){} videojsInstance = null; }
     if (hlsjsInstance) { try { hlsjsInstance.destroy(); } catch(e){} hlsjsInstance = null; }
     if (shakaPlayerInstance) { try { shakaPlayerInstance.destroy(); } catch(e){} shakaPlayerInstance = null; }
@@ -1286,12 +1310,16 @@ function cleanupAllPlayers() {
     cleanupPlayerJS();
     cleanupNativePlayer();
     
+    // إخفاء جميع حاويات المشغلات
     ['video-player', 'native-video', 'playerjs-container', 'clappr-container', 'dplayer-container', 'openplayer-container', 'mediachrome-container', 'shaka-video', 'dashjs-video', 'plyr-video', 'mediaelement-video', 'jwplayer-container', 'flowplayer-container', 'youtube-container'].forEach(id => {
         const el = $(id);
         if (el) el.classList.add('hidden');
     });
     
-    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    // إعادة التمرير للأعلى عند إغلاق المشغل فقط إذا كنا ننتقل لصفحة جديدة
+    if (document.body.classList.contains('player-open')) {
+        window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    }
 }
 
 function fallbackToNextEngine(url) {
@@ -1399,40 +1427,63 @@ function toast(message, duration = 2600) {
     }, duration);
 }
 
+function getYouTubeID(url) {
+    if (!url || typeof url !== 'string') return null;
+    try {
+        const urlObj = new URL(url);
+        // youtu.be/ID
+        if (urlObj.hostname === 'youtu.be') {
+            return urlObj.pathname.slice(1).split(/[?#]/)[0];
+        }
+        // youtube.com/...
+        if (urlObj.hostname.includes('youtube.com')) {
+            // live, embed, v, shorts
+            const paths = ['/live/', '/embed/', '/v/', '/shorts/'];
+            for (const p of paths) {
+                if (urlObj.pathname.includes(p)) {
+                    return urlObj.pathname.split(p)[1].split(/[?#]/)[0];
+                }
+            }
+            // watch?v=ID
+            if (urlObj.searchParams.has('v')) {
+                return urlObj.searchParams.get('v');
+            }
+        }
+    } catch (e) {
+        // Fallback for malformed URLs or simple strings
+    }
+    // Regex fallback for any 11-char ID after v= or /
+    const m = url.match(/(?:v=|\/|vi\/|live\/|shorts\/|embed\/)([0-9A-Za-z_-]{11})/);
+    return m ? m[1] : null;
+}
+
 window.addEventListener('popstate', (event) => {
-    // تنظيف المشغلات لضمان توقف الصوت تماماً عند الرجوع
+    // إيقاف المشغلات فوراً لضمان توقف الصوت
     cleanupAllPlayers();
 
-    // استعادة الحالة من الـ state أو الـ Hash
-    let state = event.state;
-    if (!state) {
-        state = restoreHashState();
-    }
+    // استعادة الحالة
+    const state = event.state || restoreHashState();
     
-    // تحديث المتغيرات العالمية
+    // تحديث المتغيرات العالمية من الحالة المستعادة
     currentStack = Array.isArray(state.stack) ? [...state.stack] : [];
     currentChannelId = state.channelId || null;
     window.currentViewMode = state.viewMode || 'home';
     window.currentExternalUrl = state.externalUrl || '';
 
-    // تطبيق العرض بناءً على الحالة المستعادة
+    // تحديث الواجهة
     applyViewMode();
     renderCurrentView();
     
-    // إذا كانت الحالة تتضمن قناة، قم بتشغيلها
+    // تشغيل القناة إذا كانت موجودة في الحالة
     if (currentChannelId) {
         const channel = channelsCache.find(ch => ch.id === currentChannelId);
         if (channel) selectChannel(channel, false);
     }
 
-    // منطق الخروج: إذا وصلنا للحالة الصفرية تماماً وضغط المستخدم رجوع مرة أخرى
-    // نترك للمتصفح التعامل مع الخروج أو نظهر شاشة النهاية إذا كان لا يوجد state إطلاقاً
+    // شاشة الخروج: تظهر فقط إذا كان المستخدم في الصفحة الرئيسية وحاول الرجوع
+    // نتحقق من ذلك عبر التأكد من أننا في الجذر ولا يوجد state (أي وصلنا لبداية التاريخ)
     if (!event.state && currentStack.length === 0 && !currentChannelId && window.currentViewMode === 'home') {
-        // نتحقق من وجود "بصمة" في التاريخ، إذا كانت هذه أول صفحة فعلاً
-        if (window.history.length <= 1) {
-            // لا نفعل شيء، نترك المستخدم في الصفحة الرئيسية
-        } else {
-            // إذا كان المستخدم يحاول الخروج من التطبيق
+        if (window.history.length > 1) {
             showExitScreen();
         }
     }
@@ -1557,13 +1608,10 @@ function restoreHashState() {
     }
     const [stackPart, channelId] = raw.split('|');
     const ids = stackPart ? stackPart.split(',').filter(Boolean) : [];
-    const validStack = [];
-    ids.forEach((id, index) => {
-        if (!categoriesCache[id]) return;
-        if (index === 0 || categoriesCache[id].parentId === validStack[index - 1]) {
-            validStack.push(id);
-        }
-    });
+    
+    // التعديل: لا نتحقق من الأبوية هنا لضمان المرونة، نكتفي بالتحقق من وجود المعرف
+    const validStack = ids.filter(id => categoriesCache[id]);
+    
     return { stack: validStack, channelId: channelId || null, viewMode: 'home', externalUrl: '' };
 }
 
@@ -1801,46 +1849,6 @@ function initializePlayerJS(url) {
     }
 }
 
-function cleanupAllPlayers() {
-    currentPlayerEngine = null;
-    
-    // 1. إيقاف وتنظيف جميع عناصر الفيديو (Video.js, HLS, HTML5)
-    const videoElements = document.querySelectorAll('video');
-    videoElements.forEach(video => {
-        try {
-            video.pause();
-            video.removeAttribute('src');
-            video.load();
-            video.muted = true;
-        } catch (e) {}
-    });
-
-    // 2. إيقاف وتنظيف جميع الـ iframe (YouTube وغيره) لضمان انقطاع الصوت
-    const allIframes = document.querySelectorAll('iframe');
-    allIframes.forEach(iframe => {
-        try {
-            if (iframe.id !== 'externalLinkIframe') {
-                iframe.src = '';
-            }
-        } catch (e) {}
-    });
-
-    // 3. تدمير كائنات المشغلات البرمجية
-    if (videojsInstance) { try { videojsInstance.dispose(); } catch(e){} videojsInstance = null; }
-    if (hlsjsInstance) { try { hlsjsInstance.destroy(); } catch(e){} hlsjsInstance = null; }
-    if (shakaPlayerInstance) { try { shakaPlayerInstance.destroy(); } catch(e){} shakaPlayerInstance = null; }
-    if (dashjsInstance) { try { dashjsInstance.reset(); } catch(e){} dashjsInstance = null; }
-    if (clapprInstance) { try { clapprInstance.destroy(); } catch(e){} clapprInstance = null; }
-    if (plyrInstance) { try { plyrInstance.destroy(); } catch(e){} plyrInstance = null; }
-    if (nativePlayerInstance && typeof nativePlayerInstance.destroy === 'function') {
-        try { nativePlayerInstance.destroy(); } catch(e){}
-    }
-    nativePlayerInstance = null;
-
-    cleanupNativePlayer();
-    cleanupPlayerJS();
-}
-
 function showActivePlayer(engine) {
     cleanupAllPlayers();
     let id = '';
@@ -2038,16 +2046,7 @@ function setPlayerSource(url, engine = 'videojs', resetFallbacks = true) {
                     showActivePlayer('youtube');
                     const iframe = $('youtube-iframe');
                     if (iframe) {
-                        const id = (function extractYouTubeID(u){
-                            try {
-                                const urlObj = new URL(u);
-                                if (urlObj.hostname.includes('youtu.be')) return urlObj.pathname.slice(1);
-                                if (urlObj.hostname.includes('youtube.com')) return urlObj.searchParams.get('v');
-                            } catch(e) {}
-                            const m = u.match(/(?:v=|\/)([0-9A-Za-z_-]{11})/);
-                            return m ? m[1] : null;
-                        })(url);
-                        
+                        const id = getYouTubeID(url);
                         if (id) {
                             // استخدام الرابط الصحيح للتضمين مع إضافة المعلمات اللازمة لتجاوز الرفض
                             iframe.src = `https://www.youtube.com/embed/${id}?autoplay=1&rel=0&playsinline=1&enablejsapi=1&origin=${window.location.origin}`;
@@ -2201,15 +2200,31 @@ async function renderCurrentView() {
             const card = document.createElement('div');
             card.className = 'card';
             card.innerHTML = `<img src="${cat.img || DEFAULT_IMAGE}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${cat.name}</div>`;
-            card.onclick = () => {
+            card.onclick = (e) => {
+                e.preventDefault();
+                const id = String(cat.id);
                 if (cat.link) {
+                    const ytId = getYouTubeID(cat.link);
+                    if (ytId) {
+                        selectChannel({
+                            id: 'cat_' + id,
+                            name: cat.name,
+                            img: cat.img,
+                            links: { main: { label: 'بث يوتيوب', url: cat.link } }
+                        });
+                        return;
+                    }
                     window.currentViewMode = 'externalLink';
                     window.currentExternalUrl = cat.link;
                     applyViewMode();
                     pushState();
                     return;
                 }
-                currentStack.push(String(cat.id));
+                
+                // منع التكرار في المكدس
+                if (currentStack.length > 0 && currentStack[currentStack.length - 1] === id) return;
+                
+                currentStack.push(id);
                 pushState();
                 renderCurrentView();
             };
@@ -2227,8 +2242,11 @@ async function renderCurrentView() {
         const card = document.createElement('div');
         card.className = 'card';
         card.innerHTML = `<img src="${sub.img || DEFAULT_IMAGE}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${sub.name}</div>`;
-        card.onclick = () => {
-            currentStack.push(String(sub.id));
+        card.onclick = (e) => {
+            e.preventDefault();
+            const id = String(sub.id);
+            if (currentStack.length > 0 && currentStack[currentStack.length - 1] === id) return;
+            currentStack.push(id);
             pushState();
             renderCurrentView();
         };
