@@ -1622,6 +1622,26 @@ function restoreHashState() {
     return { stack: validStack, channelId: channelId || null, viewMode: 'home', externalUrl: '' };
 }
 
+function openCategoryLink(category) {
+    const url = String(category.link || category.url || category.externalLink || '').trim();
+    if (!url) return false;
+    const ytId = getYouTubeID(url);
+    if (ytId) {
+        selectChannel({
+            id: 'cat_' + String(category.id),
+            name: category.name || 'رابط يوتيوب',
+            img: category.img,
+            links: { main: { label: 'بث يوتيوب', url } }
+        });
+        return true;
+    }
+    window.currentViewMode = 'externalLink';
+    window.currentExternalUrl = url;
+    applyViewMode();
+    pushState();
+    return true;
+}
+
 function getDescendants(rootId) {
     const ids = [rootId];
     for (let i = 0; i < ids.length; i++) {
@@ -2209,24 +2229,8 @@ async function renderCurrentView() {
             card.innerHTML = `<img src="${cat.img || DEFAULT_IMAGE}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${cat.name}</div>`;
             card.onclick = (e) => {
                 e.preventDefault();
+                if (openCategoryLink(cat)) return;
                 const id = String(cat.id);
-                if (cat.link) {
-                    const ytId = getYouTubeID(cat.link);
-                    if (ytId) {
-                        selectChannel({
-                            id: 'cat_' + id,
-                            name: cat.name,
-                            img: cat.img,
-                            links: { main: { label: 'بث يوتيوب', url: cat.link } }
-                        });
-                        return;
-                    }
-                    window.currentViewMode = 'externalLink';
-                    window.currentExternalUrl = cat.link;
-                    applyViewMode();
-                    pushState();
-                    return;
-                }
                 
                 // منع التكرار في المكدس
                 if (currentStack.length > 0 && currentStack[currentStack.length - 1] === id) return;
@@ -2251,6 +2255,7 @@ async function renderCurrentView() {
         card.innerHTML = `<img src="${sub.img || DEFAULT_IMAGE}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${sub.name}</div>`;
         card.onclick = (e) => {
             e.preventDefault();
+            if (openCategoryLink(sub)) return;
             const id = String(sub.id);
             if (currentStack.length > 0 && currentStack[currentStack.length - 1] === id) return;
             currentStack.push(id);
