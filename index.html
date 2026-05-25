@@ -344,29 +344,45 @@ body {
 
 .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, 110px);
-    gap: 8px;
-    grid-row-gap: 8px;
-    grid-column-gap: 8px;
+    grid-template-columns: repeat(auto-fill, 115px); /* حجم الخلية متناسب مع أكبر كرت (القنوات) */
+    gap: 15px;
     justify-content: center;
     max-width: 1200px;
     width: 100%;
     margin: 0 auto;
+    padding: 15px;
+}
+
+@media (max-width: 480px) {
+    .grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+        padding: 10px;
+    }
 }
 
 .card {
-    background-color: rgba(255, 255, 255, 0.92);
-    border-radius: 8px;
-    width: 110px;
-    padding: 6px;
+    background-color: rgba(255, 255, 255, 0.95);
+    border-radius: 10px;
+    width: 100%; 
+    max-width: 100px; /* كروت الأقسام تكون أصغر قليلاً ومتناسقة */
+    padding: 10px;
     text-decoration: none;
     display: flex;
     flex-direction: column;
     align-items: center;
-    transition: transform 0.2s ease;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
     cursor: pointer;
-    border: none;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+    border: 1px solid rgba(0,0,0,0.05);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    margin: 0 auto;
+}
+
+@media (max-width: 480px) {
+    .card {
+        max-width: 100%; 
+        padding: 8px;
+    }
 }
 
 .card:hover {
@@ -382,7 +398,7 @@ body {
 
 .card-title {
     margin-top: 4px;
-    font-size: clamp(11px, 1.5vw, 13px);
+    font-size: clamp(10px, 1.5vw, 12px); 
     color: #000;
     white-space: nowrap;
     overflow: hidden;
@@ -393,36 +409,57 @@ body {
 }
 
 .channel-card {
-    grid-column: span 2;
-    width: 220px;
-    min-width: 220px;
+    grid-column: span 1;
+    width: 100% !important; /* تملأ الخلية بالكامل */
+    max-width: 115px !important; /* الحجم الأكبر للقنوات */
     flex-direction: column;
-    align-items: stretch;
-    padding: 0;
+    align-items: center;
+    padding: 0 !important;
     gap: 0;
-    margin: 0;
-    background: transparent;
-    box-shadow: none;
-    border-radius: 0;
+    margin: 0 auto;
+    background: transparent !important;
+    box-shadow: none !important;
+    border-radius: 8px;
+    overflow: visible;
+    border: none !important;
+    transition: transform 0.3s cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (max-width: 480px) {
+    .channel-card {
+        max-width: 100% !important;
+        margin-bottom: 15px;
+    }
 }
 
 .channel-card img {
     width: 100%;
-    aspect-ratio: 16 / 9;
+    aspect-ratio: 16 / 9; /* النسبة القياسية لليوتيوب لظهور الصورة كاملة */
     object-fit: cover;
-    border-radius: 0;
+    border-radius: 8px; /* حواف مستديرة خفيفة كما طلبت */
     display: block;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+    border: 1px solid rgba(255,255,255,0.1);
 }
 
 .channel-card .card-title {
-    margin: 0;
-    white-space: normal;
+    margin: 8px 0 0 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     text-align: center;
-    line-height: 1.3;
+    line-height: 1.2;
     font-size: 13px;
     color: #ffffff;
-    background: #000;
-    padding: 8px 10px;
+    background: transparent;
+    padding: 0 2px;
+    text-shadow: 0 1px 3px rgba(0,0,0,1);
+    font-weight: 700;
+    width: 100%;
+}
+
+.channel-card:hover .card-title {
+    color: #ffffff; /* التأكيد على بقاء اللون أبيض عند المرور */
 }
 
 .player-container {
@@ -1496,8 +1533,11 @@ window.addEventListener('popstate', (event) => {
     // إيقاف المشغلات فوراً لضمان توقف الصوت
     cleanupAllPlayers();
 
-    // استعادة الحالة من الـ state أو الـ Hash
-    const state = event.state || restoreHashState();
+    // استعادة الحالة: نفضل event.state إذا كان موجوداً وصحيحاً
+    let state = event.state;
+    if (!state || state.path !== 'navigation') {
+        state = restoreHashState();
+    }
     
     // تحديث المتغيرات العالمية من الحالة المستعادة
     currentStack = Array.isArray(state.stack) ? [...state.stack] : [];
@@ -1506,27 +1546,26 @@ window.addEventListener('popstate', (event) => {
     window.currentExternalUrl = state.externalUrl || '';
 
     // إخفاء حاوية المشغل يدوياً لضمان الاستجابة السريعة
+    const pc = $('playerContainer');
     if (!currentChannelId) {
-        const pc = $('playerContainer');
         if (pc) pc.classList.add('hidden');
         document.body.classList.remove('player-open');
         document.body.style.overflow = '';
     }
 
-    // تحديث الواجهة فوراً
+    // تحديث الواجهة فوراً دون إعادة تحميل الصفحة
     applyViewMode();
     renderCurrentView();
     
     // تشغيل القناة إذا كانت الحالة تتضمن قناة
     if (currentChannelId) {
-        const channel = channelsCache.find(ch => ch.id === currentChannelId);
-        if (channel) selectChannel(channel, false);
-    }
-
-    // منطق شاشة الخروج: تظهر فقط إذا كنا في الجذر وحاول المستخدم الرجوع
-    if (!event.state && currentStack.length === 0 && !currentChannelId && window.currentViewMode === 'home') {
-        if (window.history.length > 1) {
-            showExitScreen();
+        const channel = (channelsCache || []).find(ch => ch.id === currentChannelId);
+        if (channel) {
+            selectChannel(channel, false);
+        } else {
+            if (pc) pc.classList.add('hidden');
+            document.body.classList.remove('player-open');
+            currentChannelId = null;
         }
     }
 });
@@ -1617,41 +1656,38 @@ function buildHash(stack, channelId) {
 
 function pushState() {
     const hash = buildHash(currentStack, currentChannelId);
-    const url = `${window.location.pathname}${window.location.search}${hash ? `#${hash}` : ''}`;
+    // نستخدم الـ Hash فقط لتجنب إعادة تحميل الصفحة في الموبايل
+    const url = hash ? `#${hash}` : '#';
     
-    // إذا كان نفس الرابط الحالي، لا داعي لإضافته للتاريخ لتجنب التكرار
-    if (window.location.hash === (hash ? `#${hash}` : '')) {
-        window.history.replaceState({ 
-            path: 'navigation', 
-            stack: [...currentStack], 
-            channelId: currentChannelId, 
-            viewMode: window.currentViewMode, 
-            externalUrl: window.currentExternalUrl 
-        }, '', url);
+    const stateData = { 
+        path: 'navigation', 
+        stack: [...currentStack], 
+        channelId: currentChannelId, 
+        viewMode: window.currentViewMode, 
+        externalUrl: window.currentExternalUrl 
+    };
+
+    if (window.location.hash !== (hash ? `#${hash}` : '')) {
+        window.history.pushState(stateData, '', url);
     } else {
-        window.history.pushState({ 
-            path: 'navigation', 
-            stack: [...currentStack], 
-            channelId: currentChannelId, 
-            viewMode: window.currentViewMode, 
-            externalUrl: window.currentExternalUrl 
-        }, '', url);
+        window.history.replaceState(stateData, '', url);
     }
 }
 
 function restoreHashState() {
-    const raw = window.location.hash.slice(1);
-    if (!raw) return { stack: [], channelId: null, viewMode: 'home', externalUrl: '' };
-    if (raw === 'matches') return { stack: [], channelId: null, viewMode: 'matches', externalUrl: '' };
-    if (raw === 'matchesTable') return { stack: [], channelId: null, viewMode: 'matchesTable', externalUrl: '' };
-    if (raw.startsWith('ext:')) {
-        const url = decodeURIComponent(raw.slice(4));
+    const hash = window.location.hash.slice(1);
+    if (!hash || hash === '') return { stack: [], channelId: null, viewMode: 'home', externalUrl: '' };
+    
+    if (hash === 'matches') return { stack: [], channelId: null, viewMode: 'matches', externalUrl: '' };
+    if (hash === 'matchesTable') return { stack: [], channelId: null, viewMode: 'matchesTable', externalUrl: '' };
+    if (hash.startsWith('ext:')) {
+        const url = decodeURIComponent(hash.slice(4));
         return { stack: [], channelId: null, viewMode: 'externalLink', externalUrl: url };
     }
-    const [stackPart, channelId] = raw.split('|');
+    
+    const [stackPart, channelId] = hash.split('|');
     const ids = stackPart ? stackPart.split(',').filter(Boolean) : [];
     
-    // التعديل: لا نتحقق من الأبوية هنا لضمان المرونة، نكتفي بالتحقق من وجود المعرف
     const validStack = ids.filter(id => categoriesCache[id]);
     
     return { stack: validStack, channelId: channelId || null, viewMode: 'home', externalUrl: '' };
@@ -2174,12 +2210,8 @@ function hidePlayer() {
     currentChannelLinks = [];
     currentQualitySources = [];
     
-    // عند إغلاق المشغل يدوياً، نحدث الحالة دون إضافة مدخل جديد في التاريخ إذا كان آخر مدخل هو المشغل
-    if (window.location.hash.includes('|')) {
-        window.history.back();
-    } else {
-        pushState();
-    }
+    // نقوم بتحديث الحالة مباشرة لتجنب أي تحديث مفاجئ للصفحة
+    pushState();
 }
 
 async function selectChannel(channel, pushHistory = true) {
@@ -2239,6 +2271,22 @@ function playSmart(links) {
     tryEnginesInParallel(links[0].url, 5);
 }
 
+function createCategoryCard(cat) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `<img src="${cat.img || DEFAULT_IMAGE}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${cat.name}</div>`;
+    card.onclick = (e) => {
+        e.preventDefault();
+        if (openCategoryLink(cat)) return;
+        const id = String(cat.id);
+        if (currentStack.length > 0 && currentStack[currentStack.length - 1] === id) return;
+        currentStack.push(id);
+        pushState();
+        renderCurrentView();
+    };
+    return card;
+}
+
 async function renderCurrentView() {
     const grid = $('grid');
     if (!grid) return;
@@ -2273,22 +2321,7 @@ async function renderCurrentView() {
         const toDisplay = roots.length > 0 ? roots : allCategories;
 
         toDisplay.forEach(cat => {
-            const card = document.createElement('div');
-            card.className = 'card';
-            card.innerHTML = `<img src="${cat.img || DEFAULT_IMAGE}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${cat.name}</div>`;
-            card.onclick = (e) => {
-                e.preventDefault();
-                if (openCategoryLink(cat)) return;
-                const id = String(cat.id);
-                
-                // منع التكرار في المكدس
-                if (currentStack.length > 0 && currentStack[currentStack.length - 1] === id) return;
-                
-                currentStack.push(id);
-                pushState();
-                renderCurrentView();
-            };
-            grid.appendChild(card);
+            grid.appendChild(createCategoryCard(cat));
         });
         
         // ننهي الدالة هنا لضمان عدم عرض أي قنوات في الصفحة الرئيسية
@@ -2296,22 +2329,10 @@ async function renderCurrentView() {
     }
 
     // --- داخل قسم معين ---
-    // 1. الأقسام الفرعية التابعة لهذا القسم
+    // 1. الأقسام الفرعية التابعة لهذا القسم (بنفس تصميم الأقسام الرئيسية)
     const subs = allCategories.filter(c => normalizeParentId(c.parentId) === String(currentId));
     subs.forEach(sub => {
-        const card = document.createElement('div');
-        card.className = 'card';
-        card.innerHTML = `<img src="${sub.img || DEFAULT_IMAGE}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${sub.name}</div>`;
-        card.onclick = (e) => {
-            e.preventDefault();
-            if (openCategoryLink(sub)) return;
-            const id = String(sub.id);
-            if (currentStack.length > 0 && currentStack[currentStack.length - 1] === id) return;
-            currentStack.push(id);
-            pushState();
-            renderCurrentView();
-        };
-        grid.appendChild(card);
+        grid.appendChild(createCategoryCard(sub));
     });
 
     // 2. القنوات التابعة لهذا القسم
@@ -2324,7 +2345,10 @@ async function renderCurrentView() {
         const card = document.createElement('div');
         card.className = 'card channel-card';
         card.innerHTML = `<img src="${getChannelCardImage(ch)}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${ch.name}</div>`;
-        card.onclick = () => selectChannel(ch);
+        card.onclick = (e) => {
+            if (e) e.preventDefault();
+            selectChannel(ch);
+        };
         grid.appendChild(card);
     });
 
@@ -2353,11 +2377,7 @@ function performSearch(query) {
         header.textContent = 'الأقسام المطابقة';
         grid.appendChild(header);
         categories.forEach(cat => {
-            const card = document.createElement('div');
-            card.className = 'card';
-            card.innerHTML = `<img src="${cat.img || DEFAULT_IMAGE}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${cat.name}</div>`;
-            card.onclick = () => { currentStack.push(cat.id); pushState(); renderCurrentView(); };
-            grid.appendChild(card);
+            grid.appendChild(createCategoryCard(cat));
         });
     }
 
@@ -2466,7 +2486,8 @@ function enterSite() {
     const splash = document.getElementById('splash-screen');
     if (splash) {
         splash.classList.add('hidden');
-        document.body.style.overflow = ''; // استعادة التمرير
+        document.body.style.overflow = '';
+        sessionStorage.setItem('splash_shown', 'true');
     }
 }
 
@@ -2474,11 +2495,17 @@ async function init() {
     if (appInitialized) return;
     appInitialized = true;
     
-    // منع التمرير أثناء ظهور واجهة الدخول
-    document.body.style.overflow = 'hidden';
+    // منع ظهور صفحة البداية عند التحديث أو الرجوع في نفس الجلسة
+    const isReturning = sessionStorage.getItem('splash_shown');
+    const splash = document.getElementById('splash-screen');
     
-    // إخفاء واجهة الدخول تلقائياً بعد 5 ثوانٍ
-    setTimeout(enterSite, 5000);
+    if (isReturning && splash) {
+        splash.style.display = 'none';
+        document.body.style.overflow = '';
+    } else {
+        document.body.style.overflow = 'hidden';
+        setTimeout(enterSite, 5000);
+    }
     
     initVideoPlayer();
     
@@ -2487,33 +2514,42 @@ async function init() {
 
     // استعادة الحالة من الرابط (Hash)
     const hashState = restoreHashState();
-    const startAtSubPage = hashState.stack.length > 0 || hashState.channelId || hashState.viewMode !== 'home';
-
-    // تهيئة الحالة الأولية
-    // إذا بدأ المستخدم في صفحة فرعية، نضع الصفحة الرئيسية في قاع التاريخ أولاً
-    if (startAtSubPage) {
-        window.history.replaceState({ path: 'navigation', stack: [], channelId: null, viewMode: 'home', externalUrl: '' }, '', window.location.pathname);
-        window.history.pushState({ 
-            path: 'navigation', 
-            stack: hashState.stack, 
-            channelId: hashState.channelId, 
-            viewMode: hashState.viewMode, 
-            externalUrl: hashState.externalUrl 
-        }, '', window.location.href);
-    } else if (!window.history.state) {
-        window.history.replaceState({ path: 'navigation', stack: [], channelId: null, viewMode: 'home', externalUrl: '' }, '', window.location.href);
-    }
-
-    currentStack = hashState.stack || [];
+    
+    // تحديث المتغيرات العالمية قبل أي عملية عرض
+    currentStack = Array.isArray(hashState.stack) ? [...hashState.stack] : [];
     currentChannelId = hashState.channelId || null;
     window.currentViewMode = hashState.viewMode || 'home';
     window.currentExternalUrl = hashState.externalUrl || '';
+
+    // تهيئة التاريخ بذكاء لمنع التحديث عند الرجوع:
+    const isAtHome = currentStack.length === 0 && !currentChannelId && window.currentViewMode === 'home';
+    
+    if (!window.history.state) {
+        if (!isAtHome) {
+            window.history.replaceState({ path: 'navigation', stack: [], channelId: null, viewMode: 'home', externalUrl: '' }, '', '#');
+            window.history.pushState({ 
+                path: 'navigation', 
+                stack: [...currentStack], 
+                channelId: currentChannelId, 
+                viewMode: window.currentViewMode, 
+                externalUrl: window.currentExternalUrl 
+            }, '', window.location.hash || '#');
+        } else {
+            window.history.replaceState({ 
+                path: 'navigation', 
+                stack: [], 
+                channelId: null, 
+                viewMode: 'home', 
+                externalUrl: '' 
+            }, '', '#');
+        }
+    }
 
     if (currentChannelId && !channelsCache.some(ch => ch.id === currentChannelId)) {
         currentChannelId = null;
     }
 
-    // تطبيق العرض الأولي
+    // تطبيق العرض بناءً على الحالة المستعادة
     applyViewMode();
     await renderCurrentView();
 
@@ -2534,14 +2570,14 @@ async function init() {
             };
         });
         categoriesCache = map;
-        renderCurrentView(); // تحديث الواجهة فوراً عند تغير البيانات
+        renderCurrentView(); 
     });
 
     database.ref('channels').on('value', (snapshot) => {
         const list = [];
         snapshot.forEach(ch => { list.push({ id: ch.key, ...ch.val() }); });
         channelsCache = list;
-        renderCurrentView(); // تحديث الواجهة فوراً عند تغير البيانات
+        renderCurrentView();
     });
 }
 
