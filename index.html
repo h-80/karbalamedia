@@ -462,6 +462,57 @@ body {
     color: #ffffff; /* التأكيد على بقاء اللون أبيض عند المرور */
 }
 
+/* Category card styles: make image fill the card and title below in white */
+.category-card {
+    grid-column: span 1;
+    width: 100% !important;
+    max-width: 115px !important;
+    flex-direction: column;
+    align-items: center;
+    padding: 0 !important;
+    gap: 0;
+    margin: 0 auto;
+    background: transparent !important;
+    box-shadow: none !important;
+    border-radius: 8px;
+    overflow: visible;
+    border: none !important;
+    transition: transform 0.3s cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (max-width: 480px) {
+    .category-card {
+        max-width: 100% !important;
+        margin-bottom: 15px;
+    }
+}
+
+.category-card .category-img {
+    width: 100%;
+    aspect-ratio: 1 / 1; /* make image square */
+    object-fit: cover;
+    border-radius: 8px;
+    display: block;
+    box-shadow: 0 6px 14px rgba(0,0,0,0.16); /* lighter, softer shadow */
+    border: 1px solid rgba(255,255,255,0.1);
+}
+
+.category-card .category-title {
+    margin: 8px 0 0 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
+    line-height: 1.2;
+    font-size: 13px;
+    color: #ffffff;
+    background: transparent;
+    padding: 0 2px;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.6); /* softer text shadow */
+    font-weight: 700;
+    width: 100%;
+}
+
 .player-container {
     position: fixed;
     top: 0;
@@ -1545,7 +1596,7 @@ window.addEventListener('popstate', (event) => {
     window.currentViewMode = state.viewMode || 'home';
     window.currentExternalUrl = state.externalUrl || '';
 
-    // إخفاء حاوية المشغل يدوياً لضمان الاستجابة السريعة
+    // إخفاء حاوية المشغل يدوياً
     const pc = $('playerContainer');
     if (!currentChannelId) {
         if (pc) pc.classList.add('hidden');
@@ -1575,15 +1626,12 @@ function showExitScreen() {
     if (exitScreen) {
         exitScreen.classList.remove('hidden');
         document.body.style.overflow = 'hidden';
+        cleanupAllPlayers();
         
-        // إغلاق الموقع فعلياً بعد 3 ثوانٍ (للتطبيقات المحولة أو المتصفحات التي تدعم ذلك)
+        // محاولة إغلاق الموقع فعلياً بعد 3 ثوانٍ (للتطبيقات المحولة)
         setTimeout(() => {
-            if (window.Android) {
+            if (window.Android && typeof window.Android.exitApp === 'function') {
                 window.Android.exitApp();
-            } else {
-                // محاولة إغلاق النافذة في المتصفح
-                window.close();
-                // إذا لم تنجح (بسبب قيود المتصفح)، نبقى في شاشة النهاية
             }
         }, 3000);
     }
@@ -1650,13 +1698,12 @@ function buildHash(stack, channelId) {
     if (window.currentViewMode === 'matchesTable') return 'matchesTable';
     if (window.currentViewMode === 'externalLink' && window.currentExternalUrl) return `ext:${encodeURIComponent(window.currentExternalUrl)}`;
     const stackHash = serializeStack(stack);
-    if (!stackHash && !channelId) return '';
-    return channelId ? `${stackHash}|${channelId}` : stackHash;
+    if (!stackHash && !channelId) return null;
+    return channelId ? `${stackHash}|${channelId}` : (stackHash || null);
 }
 
 function pushState() {
     const hash = buildHash(currentStack, currentChannelId);
-    // نستخدم الـ Hash فقط لتجنب إعادة تحميل الصفحة في الموبايل
     const url = hash ? `#${hash}` : '#';
     
     const stateData = { 
@@ -1667,7 +1714,8 @@ function pushState() {
         externalUrl: window.currentExternalUrl 
     };
 
-    if (window.location.hash !== (hash ? `#${hash}` : '')) {
+    // التحقق من أن الـ URL مختلفة فعلاً قبل إضافة حالة جديدة
+    if (window.location.hash !== url) {
         window.history.pushState(stateData, '', url);
     } else {
         window.history.replaceState(stateData, '', url);
@@ -1788,7 +1836,18 @@ function showPlayer(pushHistory = true) {
     $('playerContainer').classList.remove('hidden');
     document.body.classList.add('player-open');
     document.body.style.overflow = 'hidden';
-    if (pushHistory) pushState();
+    
+    if (pushHistory) {
+        // حفظ الحالة الحالية مع القناة الجديدة
+        window.history.pushState({ 
+            path: 'navigation', 
+            stack: [...currentStack], 
+            channelId: currentChannelId, 
+            viewMode: window.currentViewMode, 
+            externalUrl: window.currentExternalUrl 
+        }, '', buildHash(currentStack, currentChannelId) ? `#${buildHash(currentStack, currentChannelId)}` : '#');
+    }
+    
     showQualityButtons();
     showPlayerControls();
 }
@@ -2210,14 +2269,26 @@ function hidePlayer() {
     currentChannelLinks = [];
     currentQualitySources = [];
     
-    // نقوم بتحديث الحالة مباشرة لتجنب أي تحديث مفاجئ للصفحة
-    pushState();
+    // تحديث الحالة وإزالة معرف القناة من الـ URL لضمان العودة للشبكة الصحيحة
+    const newHash = buildHash(currentStack, null);
+    const newUrl = newHash ? `#${newHash}` : '#';
+    window.history.replaceState({ 
+        path: 'navigation', 
+        stack: [...currentStack], 
+        channelId: null, 
+        viewMode: window.currentViewMode, 
+        externalUrl: window.currentExternalUrl 
+    }, '', newUrl);
+
+    // تأكد من تحديث الواجهة فورًا لعرض الأقسام/القنوات بدل صفحة سوداء
+    applyViewMode();
+    try { renderCurrentView(); } catch(e) { console.warn('renderCurrentView failed after hidePlayer', e); }
 }
 
 async function selectChannel(channel, pushHistory = true) {
     const links = parseChannelLinks(channel);
     if (!links.length) {
-        if ($('grid')) $('grid').innerHTML = '<div class="card message-card">لا يوجد رابط بث صالح لهذه القناة</div>';
+        toast('لا يوجد رابط بث صالح لهذه القناة');
         return;
     }
     currentChannelId = channel.id;
@@ -2273,13 +2344,20 @@ function playSmart(links) {
 
 function createCategoryCard(cat) {
     const card = document.createElement('div');
-    card.className = 'card';
-    card.innerHTML = `<img src="${cat.img || DEFAULT_IMAGE}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${cat.name}</div>`;
+    card.className = 'card category-card';
+    card.innerHTML = `<img class="category-img" src="${cat.img || DEFAULT_IMAGE}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="category-title">${cat.name}</div>`;
     card.onclick = (e) => {
         e.preventDefault();
+        e.stopPropagation();
         if (openCategoryLink(cat)) return;
         const id = String(cat.id);
-        if (currentStack.length > 0 && currentStack[currentStack.length - 1] === id) return;
+        
+        // التحقق من عدم الانتقال لنفس القسم
+        if (currentStack.length > 0 && currentStack[currentStack.length - 1] === id) {
+            return;
+        }
+        
+        // إضافة القسم الجديد للـ Stack
         currentStack.push(id);
         pushState();
         renderCurrentView();
@@ -2290,17 +2368,12 @@ function createCategoryCard(cat) {
 async function renderCurrentView() {
     const grid = $('grid');
     if (!grid) return;
-    
+
     // 1. تحديد المعرف الحالي بدقة
     let currentId = (currentStack && currentStack.length > 0) ? String(currentStack[currentStack.length - 1]) : null;
-    
-    // تنظيف المعرف من القيم الوهمية
     if (!currentId || currentId === "" || currentId === "null" || currentId === "undefined" || currentId === "0") {
         currentId = null;
     }
-
-    // تصفير الشبكة قبل العرض
-    grid.innerHTML = ''; 
 
     // التأكد من وجود بيانات
     const allCategories = Object.values(categoriesCache || {});
@@ -2309,33 +2382,39 @@ async function renderCurrentView() {
         return;
     }
 
+    // نبني المحتوى في Fragment أولاً لتفادي وميض الشاشة الفارغة
+    const frag = document.createDocumentFragment();
+
     // --- الصفحة الرئيسية ---
     if (currentId === null) {
-        // فلترة الأقسام الرئيسية (التي ليس لها أب أو أبوه غير موجود في القائمة)
         let roots = allCategories.filter(c => {
             const pid = normalizeParentId(c.parentId);
             return !pid || pid === "" || !categoriesCache[pid];
         });
-
-        // التعديل: إذا لم نجد جذوراً، نعرض كل الأقسام لضمان عدم بقاء الصفحة فارغة
         const toDisplay = roots.length > 0 ? roots : allCategories;
-
-        toDisplay.forEach(cat => {
-            grid.appendChild(createCategoryCard(cat));
-        });
-        
-        // ننهي الدالة هنا لضمان عدم عرض أي قنوات في الصفحة الرئيسية
+        toDisplay.forEach(cat => frag.appendChild(createCategoryCard(cat)));
+        // استبدال محتوى الشبكة دفعة واحدة
+        grid.innerHTML = '';
+        grid.appendChild(frag);
         return;
     }
 
     // --- داخل قسم معين ---
-    // 1. الأقسام الفرعية التابعة لهذا القسم (بنفس تصميم الأقسام الرئيسية)
-    const subs = allCategories.filter(c => normalizeParentId(c.parentId) === String(currentId));
-    subs.forEach(sub => {
-        grid.appendChild(createCategoryCard(sub));
-    });
+    if (!categoriesCache[currentId]) {
+        currentStack = [];
+        window.history.replaceState({ 
+            path: 'navigation', 
+            stack: [], 
+            channelId: null, 
+            viewMode: 'home', 
+            externalUrl: '' 
+        }, '', '#');
+        return renderCurrentView();
+    }
 
-    // 2. القنوات التابعة لهذا القسم
+    const subs = allCategories.filter(c => normalizeParentId(c.parentId) === String(currentId));
+    subs.forEach(sub => frag.appendChild(createCategoryCard(sub)));
+
     const channels = (channelsCache || []).filter(ch => {
         const cids = getChannelCategoryIds(ch);
         return cids.includes(String(currentId));
@@ -2349,11 +2428,14 @@ async function renderCurrentView() {
             if (e) e.preventDefault();
             selectChannel(ch);
         };
-        grid.appendChild(card);
+        frag.appendChild(card);
     });
 
+    grid.innerHTML = '';
     if (subs.length === 0 && channels.length === 0) {
         grid.innerHTML = '<div class="empty-section-msg">عذراً، هذا القسم لا يحتوي على محتوى حالياً</div>';
+    } else {
+        grid.appendChild(frag);
     }
 }
 
@@ -2361,7 +2443,10 @@ function performSearch(query) {
     const grid = $('grid');
     if (!grid) return;
     const q = String(query || '').trim().toLowerCase();
-    if (!q) { renderCurrentView(); return; }
+    if (!q) { 
+        renderCurrentView(); 
+        return; 
+    }
     grid.innerHTML = '';
     const categories = Object.values(categoriesCache || {}).filter(c => (c.name || '').toLowerCase().includes(q));
     const channels = (channelsCache || []).filter(ch => (ch.name || '').toLowerCase().includes(q) || (ch.tags || '').toString().toLowerCase().includes(q));
@@ -2412,7 +2497,9 @@ function showPlayerControls() {
 
 function initVideoPlayer() {
     document.addEventListener('keydown', event => {
-        if (event.key === 'Escape' && $('playerContainer') && !$('playerContainer').classList.contains('hidden')) window.history.back();
+        if (event.key === 'Escape' && $('playerContainer') && !$('playerContainer').classList.contains('hidden')) {
+            hidePlayer();
+        }
     });
 
     const playerContainer = $('playerContainer');
@@ -2521,7 +2608,7 @@ async function init() {
     window.currentViewMode = hashState.viewMode || 'home';
     window.currentExternalUrl = hashState.externalUrl || '';
 
-    // تهيئة التاريخ بذكاء لمنع التحديث عند الرجوع:
+    // تهيئة التاريخ بذكاء لمنع التحديث عند الرجوع
     const isAtHome = currentStack.length === 0 && !currentChannelId && window.currentViewMode === 'home';
     
     if (!window.history.state) {
@@ -2545,9 +2632,13 @@ async function init() {
         }
     }
 
+    // التحقق من أن القناة الحالية موجودة بالفعل
     if (currentChannelId && !channelsCache.some(ch => ch.id === currentChannelId)) {
         currentChannelId = null;
     }
+
+    // التحقق من أن الأقسام الموجودة في Stack موجودة بالفعل
+    currentStack = currentStack.filter(id => categoriesCache[id]);
 
     // تطبيق العرض بناءً على الحالة المستعادة
     applyViewMode();
@@ -2559,7 +2650,7 @@ async function init() {
         if (channel) await selectChannel(channel, false);
     }
 
-    // 5. تفعيل التحديثات التلقائية (Real-time Sync)
+    // 5. تفعيل التحديثات التلقائية (Real-time Sync) - دون تحديث عند المشغل
     database.ref('categories').on('value', (snapshot) => {
         const map = {};
         snapshot.forEach(c => {
@@ -2570,14 +2661,16 @@ async function init() {
             };
         });
         categoriesCache = map;
-        renderCurrentView(); 
+        // تحديث العرض فقط إذا لم نكن في المشغل
+        if (!currentChannelId) renderCurrentView();
     });
 
     database.ref('channels').on('value', (snapshot) => {
         const list = [];
         snapshot.forEach(ch => { list.push({ id: ch.key, ...ch.val() }); });
         channelsCache = list;
-        renderCurrentView();
+        // تحديث العرض فقط إذا لم نكن في المشغل
+        if (!currentChannelId) renderCurrentView();
     });
 }
 
@@ -2675,13 +2768,30 @@ document.addEventListener('DOMContentLoaded', () => {
     const matchesNav = $('matchesNav');
     if (homeNav && matchesNav) {
         const goToHome = () => {
-            window.currentViewMode = 'home'; window.currentExternalUrl = '';
-            homeNav.classList.add('active'); matchesNav.classList.remove('active');
+            // إفراغ الستاك والعودة لعرض الأقسام الجذرية
+            currentStack = [];
+            currentChannelId = null;
+            window.currentViewMode = 'home'; 
+            window.currentExternalUrl = '';
+            homeNav.classList.add('active'); 
+            matchesNav.classList.remove('active');
             if ($('grid')) $('grid').classList.remove('hidden');
             if ($('matchesTableContainer')) $('matchesTableContainer').classList.add('hidden');
             if ($('externalLinkContainer')) $('externalLinkContainer').classList.add('hidden');
-            currentStack = []; currentChannelId = null; pushState(); renderCurrentView();
-            if ($('playerContainer') && !$('playerContainer').classList.contains('hidden')) hidePlayer();
+
+            // إخفاء المشغل إن كان ظاهراً
+            if (currentChannelId) hidePlayer();
+
+            // تحديث الواجهة وحالة التاريخ
+            applyViewMode();
+            try { renderCurrentView(); } catch(e) { console.warn('renderCurrentView failed in goToHome', e); }
+            window.history.replaceState({ 
+                path: 'navigation', 
+                stack: [...currentStack], 
+                channelId: null, 
+                viewMode: 'home', 
+                externalUrl: '' 
+            }, '', '#');
         };
         homeNav.addEventListener('click', goToHome);
         matchesNav.addEventListener('click', () => {
