@@ -346,6 +346,8 @@ body {
     display: grid;
     grid-template-columns: repeat(auto-fill, 110px);
     gap: 8px;
+    grid-row-gap: 8px;
+    grid-column-gap: 8px;
     justify-content: center;
     max-width: 1200px;
     width: 100%;
@@ -388,6 +390,39 @@ body {
     width: 100%;
     text-align: center;
     font-weight: 700;
+}
+
+.channel-card {
+    grid-column: span 2;
+    width: 220px;
+    min-width: 220px;
+    flex-direction: column;
+    align-items: stretch;
+    padding: 0;
+    gap: 0;
+    margin: 0;
+    background: transparent;
+    box-shadow: none;
+    border-radius: 0;
+}
+
+.channel-card img {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+    border-radius: 0;
+    display: block;
+}
+
+.channel-card .card-title {
+    margin: 0;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.3;
+    font-size: 13px;
+    color: #ffffff;
+    background: #000;
+    padding: 8px 10px;
 }
 
 .player-container {
@@ -1667,6 +1702,20 @@ function getChannelCategoryIds(channel) {
     return ids.map(id => String(id)).filter(id => id && id !== 'undefined');
 }
 
+function getYouTubeThumbnail(url) {
+    const ytId = getYouTubeID(url);
+    return ytId ? `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` : '';
+}
+
+function getChannelCardImage(channel) {
+    if (!channel) return DEFAULT_IMAGE;
+    if (channel.img) return channel.img;
+    const links = parseChannelLinks(channel);
+    const ytLink = links.find(link => link.url && getYouTubeID(link.url));
+    if (ytLink) return getYouTubeThumbnail(ytLink.url);
+    return DEFAULT_IMAGE;
+}
+
 function parseChannelLinks(ch) {
     const links = [];
     if (ch.links && typeof ch.links === 'object') {
@@ -2273,8 +2322,8 @@ async function renderCurrentView() {
 
     channels.forEach(ch => {
         const card = document.createElement('div');
-        card.className = 'card';
-        card.innerHTML = `<img src="${ch.img || DEFAULT_IMAGE}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${ch.name}</div>`;
+        card.className = 'card channel-card';
+        card.innerHTML = `<img src="${getChannelCardImage(ch)}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${ch.name}</div>`;
         card.onclick = () => selectChannel(ch);
         grid.appendChild(card);
     });
@@ -2319,8 +2368,8 @@ function performSearch(query) {
         grid.appendChild(header);
         channels.forEach(ch => {
             const card = document.createElement('div');
-            card.className = 'card';
-            card.innerHTML = `<img src="${ch.img || DEFAULT_IMAGE}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${ch.name}</div>`;
+            card.className = 'card channel-card';
+            card.innerHTML = `<img src="${getChannelCardImage(ch)}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${ch.name}</div>`;
             card.onclick = () => selectChannel(ch);
             grid.appendChild(card);
         });
