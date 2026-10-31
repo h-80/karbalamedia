@@ -1163,6 +1163,34 @@ body {
     transform: translateY(-3px) scale(1.05);
     box-shadow: 0 8px 25px rgba(255, 102, 0, 0.5);
 }
+
+/* ===== كروت قنوات يوتيوب (قوائم التشغيل والفيديوهات) ===== */
+.grid.yt-wide { grid-template-columns: repeat(auto-fill, 200px); }
+.grid.yt-wide .yt-card { max-width: 200px; }
+.yt-card img { aspect-ratio: 16 / 9; }
+.yt-card .yt-card-title {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    min-height: 2.8em;
+    line-height: 1.4;
+    font-size: 12px;
+}
+.yt-card .yt-card-sub { font-size: 11px; color: #555; margin-top: 2px; }
+.yt-title {
+    grid-column: 1 / -1;
+    text-align: center;
+    color: #fff;
+    font-weight: 800;
+    font-size: 15px;
+    padding: 6px 10px;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.7);
+}
+@media (max-width: 480px) {
+    .grid.yt-wide { grid-template-columns: repeat(2, 1fr); }
+    .grid.yt-wide .yt-card { max-width: 100%; }
+}
 </style>
     <link href="https://vjs.zencdn.net/8.10.0/video-js.css" rel="stylesheet" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" integrity="sha512-iecdLmaskl7CVkqkXNQ/ZH/XLlvWZOJyj7Yy7tcenmpD1ypASozpmT/E0iPtmFIB46ZmdtAc9eNBvH0H/ZpiBw==" crossorigin="anonymous" referrerpolicy="no-referrer" />
@@ -1595,6 +1623,7 @@ window.addEventListener('popstate', (event) => {
     currentChannelId = state.channelId || null;
     window.currentViewMode = state.viewMode || 'home';
     window.currentExternalUrl = state.externalUrl || '';
+    window.ytNav = (window.currentViewMode === 'home') ? ytParseHash(window.location.hash.slice(1).split('@')[1] || '') : null;
 
     // إخفاء حاوية المشغل يدوياً
     const pc = $('playerContainer');
@@ -1698,8 +1727,10 @@ function buildHash(stack, channelId) {
     if (window.currentViewMode === 'matchesTable') return 'matchesTable';
     if (window.currentViewMode === 'externalLink' && window.currentExternalUrl) return `ext:${encodeURIComponent(window.currentExternalUrl)}`;
     const stackHash = serializeStack(stack);
-    if (!stackHash && !channelId) return null;
-    return channelId ? `${stackHash}|${channelId}` : (stackHash || null);
+    const yt = (window.ytNav && window.ytNav.ch) ? '@' + window.ytNav.ch + (window.ytNav.pl ? '.' + window.ytNav.pl : '') : '';
+    if (!stackHash && !channelId && !yt) return null;
+    const base = channelId ? `${stackHash}|${channelId}` : stackHash;
+    return base + yt;
 }
 
 function pushState() {
@@ -1733,12 +1764,15 @@ function restoreHashState() {
         return { stack: [], channelId: null, viewMode: 'externalLink', externalUrl: url };
     }
     
-    const [stackPart, channelId] = hash.split('|');
+    let mainPart = hash, ytPart = '';
+    const atPos = hash.indexOf('@');
+    if (atPos !== -1) { mainPart = hash.slice(0, atPos); ytPart = hash.slice(atPos + 1); }
+    const [stackPart, channelId] = mainPart.split('|');
     const ids = stackPart ? stackPart.split(',').filter(Boolean) : [];
     
     const validStack = ids.filter(id => categoriesCache[id]);
     
-    return { stack: validStack, channelId: channelId || null, viewMode: 'home', externalUrl: '' };
+    return { stack: validStack, channelId: channelId || null, viewMode: 'home', externalUrl: '', yt: ytParseHash(ytPart) };
 }
 
 function openCategoryLink(category) {
@@ -1794,6 +1828,7 @@ function getYouTubeThumbnail(url) {
 function getChannelCardImage(channel) {
     if (!channel) return DEFAULT_IMAGE;
     if (channel.img) return channel.img;
+    if (ytChannelLinkOf(channel)) return DEFAULT_IMAGE;
     const links = parseChannelLinks(channel);
     const ytLink = links.find(link => link.url && getYouTubeID(link.url));
     if (ytLink) return getYouTubeThumbnail(ytLink.url);
@@ -2286,6 +2321,8 @@ function hidePlayer() {
 }
 
 async function selectChannel(channel, pushHistory = true) {
+    const ytLink = ytChannelLinkOf(channel);
+    if (ytLink) { openYouTubeChannel(ytLink); return; }
     const links = parseChannelLinks(channel);
     if (!links.length) {
         toast('لا يوجد رابط بث صالح لهذه القناة');
@@ -2342,6 +2379,250 @@ function playSmart(links) {
     tryEnginesInParallel(links[0].url, 5);
 }
 
+// ================== قنوات يوتيوب: قوائم التشغيل والفيديوهات (جلب تلقائي) ==================
+const YT_API_KEY = 'AIzaSyBD3dC6KPWL3ePJFayEr-vN0cxJ7BYdzys';
+const YT_TTL = 6 * 60 * 60 * 1000; // كاش 6 ساعات لتوفير حصة الـ API
+const YT_MAX_VIDEOS = 500;
+window.ytNav = null; // { ch: معرف القناة, pl: معرف القائمة }
+let ytRenderToken = 0;
+const ytInflight = {};
+
+function ytParseHash(part) {
+    if (!part) return null;
+    const bits = part.split('.');
+    return bits[0] ? { ch: bits[0], pl: bits[1] || '' } : null;
+}
+
+function ytParseChannelUrl(url) {
+    try {
+        const u = new URL(String(url).trim());
+        if (!/(^|\.)youtube\.com$/i.test(u.hostname)) return null;
+        const seg = u.pathname.split('/').filter(Boolean);
+        if (!seg.length) return null;
+        if (seg[0].startsWith('@')) return { forHandle: decodeURIComponent(seg[0]) };
+        if (seg[0] === 'channel' && seg[1]) return { id: seg[1] };
+        if (seg[0] === 'user' && seg[1]) return { forUsername: decodeURIComponent(seg[1]) };
+        if (seg[0] === 'c' && seg[1]) return { forHandle: '@' + decodeURIComponent(seg[1]) };
+    } catch (e) {}
+    return null;
+}
+
+// يرجع رابط قناة يوتيوب إن كانت هذه "قناة" من نوع قناة يوتيوب، وإلا null
+function ytChannelLinkOf(ch) {
+    if (!ch) return null;
+    const l = parseChannelLinks(ch).find(x => ytParseChannelUrl(x.url));
+    return l ? l.url : null;
+}
+
+async function ytCachedRaw(key, loader) {
+    const k = 'yt:' + key;
+    try {
+        const raw = localStorage.getItem(k);
+        if (raw) { const o = JSON.parse(raw); if (Date.now() - o.t < YT_TTL) return o.v; }
+    } catch (e) {}
+    const v = await loader();
+    try { localStorage.setItem(k, JSON.stringify({ t: Date.now(), v })); } catch (e) {}
+    return v;
+}
+function ytCached(key, loader) {
+    if (ytInflight[key]) return ytInflight[key];
+    const p = ytCachedRaw(key, loader).finally(() => { delete ytInflight[key]; });
+    ytInflight[key] = p;
+    return p;
+}
+
+async function ytApi(path, params) {
+    const q = new URLSearchParams({ key: YT_API_KEY });
+    Object.keys(params).forEach(k => { if (params[k] !== '' && params[k] != null) q.set(k, params[k]); });
+    const r = await fetch('https://www.googleapis.com/youtube/v3/' + path + '?' + q.toString());
+    let j;
+    try { j = await r.json(); } catch (e) { throw new Error('تعذر الاتصال بيوتيوب'); }
+    if (j.error) throw new Error(j.error.message || 'خطأ من يوتيوب');
+    return j;
+}
+
+function ytThumb(t) {
+    if (!t) return '';
+    return (t.medium || t.high || t.standard || t.default || {}).url || '';
+}
+
+async function ytFetchChannel(params) {
+    const j = await ytApi('channels', Object.assign({ part: 'snippet' }, params));
+    const c = (j.items || [])[0];
+    if (!c) throw new Error('لم يتم العثور على القناة');
+    return { id: c.id, title: c.snippet.title, thumb: ytThumb(c.snippet.thumbnails) };
+}
+
+function ytResolveChannelLink(url) {
+    const p = ytParseChannelUrl(url);
+    if (!p) return Promise.reject(new Error('رابط قناة غير صالح'));
+    return ytCached('chl:' + url, () => ytFetchChannel(p));
+}
+function ytGetChannel(id) {
+    return ytCached('ch:' + id, () => ytFetchChannel({ id }));
+}
+
+function ytGetPlaylists(channelId) {
+    return ytCached('pl:' + channelId, async () => {
+        const out = [];
+        let token = '';
+        do {
+            const j = await ytApi('playlists', { part: 'snippet,contentDetails', channelId, maxResults: 50, pageToken: token });
+            (j.items || []).forEach(p => {
+                if (p.contentDetails && p.contentDetails.itemCount === 0) return;
+                out.push({ id: p.id, title: p.snippet.title, thumb: ytThumb(p.snippet.thumbnails), count: p.contentDetails ? p.contentDetails.itemCount : 0 });
+            });
+            token = j.nextPageToken || '';
+        } while (token);
+        // ترتيب صاحب القناة: قوائم أقسام القناة الرئيسية أولاً بترتيبها، ثم باقي القوائم
+        try {
+            const s = await ytApi('channelSections', { part: 'contentDetails', channelId });
+            const order = [];
+            (s.items || []).forEach(sec => {
+                ((sec.contentDetails && sec.contentDetails.playlists) || []).forEach(id => { if (!order.includes(id)) order.push(id); });
+            });
+            if (order.length) {
+                const rank = (p, i) => { const k = order.indexOf(p.id); return k === -1 ? order.length + i : k; };
+                return out.map((p, i) => ({ p, r: rank(p, i) })).sort((a, b) => a.r - b.r).map(x => x.p);
+            }
+        } catch (e) {}
+        return out;
+    });
+}
+
+function ytGetVideos(playlistId) {
+    return ytCached('vid:' + playlistId, async () => {
+        const out = [];
+        let token = '';
+        do {
+            const j = await ytApi('playlistItems', { part: 'snippet,contentDetails', playlistId, maxResults: 50, pageToken: token });
+            (j.items || []).forEach(it => {
+                const t = it.snippet.title;
+                if (t === 'Private video' || t === 'Deleted video') return;
+                out.push({ id: it.contentDetails.videoId, title: t, thumb: ytThumb(it.snippet.thumbnails) });
+            });
+            token = j.nextPageToken || '';
+        } while (token && out.length < YT_MAX_VIDEOS);
+        return out;
+    });
+}
+
+function ytMakeCard(imgUrl, title, sub, onClick) {
+    const card = document.createElement('div');
+    card.className = 'card yt-card';
+    const img = document.createElement('img');
+    img.loading = 'lazy';
+    img.src = imgUrl || DEFAULT_IMAGE;
+    img.onerror = () => { img.onerror = null; img.src = DEFAULT_IMAGE; };
+    const t = document.createElement('div');
+    t.className = 'card-title yt-card-title';
+    t.textContent = title || '';
+    card.appendChild(img);
+    card.appendChild(t);
+    if (sub) {
+        const s = document.createElement('div');
+        s.className = 'yt-card-sub';
+        s.textContent = sub;
+        card.appendChild(s);
+    }
+    card.onclick = (e) => { if (e) { e.preventDefault(); e.stopPropagation(); } onClick(); };
+    return card;
+}
+
+function ytMessage(grid, text) {
+    grid.innerHTML = '';
+    const d = document.createElement('div');
+    d.className = 'empty-section-msg';
+    d.textContent = text;
+    grid.appendChild(d);
+}
+
+function ytTitleBar(text) {
+    const d = document.createElement('div');
+    d.className = 'yt-title';
+    d.textContent = text;
+    return d;
+}
+
+async function renderYouTubeView() {
+    const grid = $('grid');
+    if (!grid || !window.ytNav) return;
+    const nav = window.ytNav;
+    const token = ++ytRenderToken;
+    ytMessage(grid, 'جاري التحميل...');
+    try {
+        const ch = await ytGetChannel(nav.ch);
+        const pls = await ytGetPlaylists(nav.ch);
+        if (token !== ytRenderToken) return;
+        const frag = document.createDocumentFragment();
+
+        if (!nav.pl) {
+            // مستوى قوائم التشغيل
+            if (!pls.length) { ytMessage(grid, 'لا توجد قوائم تشغيل في هذه القناة'); return; }
+            frag.appendChild(ytTitleBar(ch.title));
+            pls.forEach(p => {
+                frag.appendChild(ytMakeCard(p.thumb, p.title, p.count + ' فيديو', () => {
+                    window.ytNav = { ch: nav.ch, pl: p.id };
+                    pushState();
+                    renderCurrentView();
+                    window.scrollTo(0, 0);
+                }));
+            });
+        } else {
+            // مستوى فيديوهات القائمة
+            const pl = pls.find(p => p.id === nav.pl);
+            const vids = await ytGetVideos(nav.pl);
+            if (token !== ytRenderToken) return;
+            if (!vids.length) { ytMessage(grid, 'لا توجد فيديوهات متاحة في هذه القائمة'); return; }
+            frag.appendChild(ytTitleBar((pl ? pl.title : 'قائمة التشغيل') + ' - ' + ch.title));
+            vids.forEach(v => {
+                frag.appendChild(ytMakeCard(v.thumb, v.title, '', () => ytPlayVideo(v)));
+            });
+        }
+        grid.innerHTML = '';
+        grid.appendChild(frag);
+    } catch (e) {
+        if (token !== ytRenderToken) return;
+        console.warn('YouTube error', e);
+        ytMessage(grid, 'تعذر جلب البيانات من يوتيوب: ' + (e && e.message ? e.message : ''));
+    }
+}
+
+function ytPlayVideo(v) {
+    // نعيد استخدام المشغل الحالي في الموقع
+    selectChannel({
+        id: 'yt_' + v.id,
+        name: v.title,
+        img: v.thumb,
+        links: { main: { label: 'يوتيوب', url: 'https://www.youtube.com/watch?v=' + v.id } }
+    });
+}
+
+async function openYouTubeChannel(url) {
+    const grid = $('grid');
+    if (grid) ytMessage(grid, 'جاري التحميل...');
+    try {
+        const info = await ytResolveChannelLink(url);
+        window.ytNav = { ch: info.id, pl: '' };
+        pushState();
+        renderCurrentView();
+        window.scrollTo(0, 0);
+    } catch (e) {
+        toast('تعذر فتح القناة: ' + (e && e.message ? e.message : ''));
+        renderCurrentView();
+    }
+}
+
+// يجلب صورة القناة تلقائياً لكرت قناة يوتيوب إذا لم تُحدَّد صورة من لوحة التحكم
+function ytEnhanceCard(card, ch) {
+    if (ch.img) return;
+    const link = ytChannelLinkOf(ch);
+    if (!link) return;
+    const img = card.querySelector('img');
+    ytResolveChannelLink(link).then(info => { if (img && info.thumb) img.src = info.thumb; }).catch(() => {});
+}
+// ================== نهاية قسم قنوات يوتيوب ==================
+
 function createCategoryCard(cat) {
     const card = document.createElement('div');
     card.className = 'card category-card';
@@ -2368,6 +2649,11 @@ function createCategoryCard(cat) {
 async function renderCurrentView() {
     const grid = $('grid');
     if (!grid) return;
+
+    // عرض قنوات يوتيوب (قوائم التشغيل / الفيديوهات)
+    const inYt = !!(window.ytNav && window.ytNav.ch);
+    grid.classList.toggle('yt-wide', inYt);
+    if (inYt) { renderYouTubeView(); return; }
 
     // 1. تحديد المعرف الحالي بدقة
     let currentId = (currentStack && currentStack.length > 0) ? String(currentStack[currentStack.length - 1]) : null;
@@ -2428,6 +2714,7 @@ async function renderCurrentView() {
             if (e) e.preventDefault();
             selectChannel(ch);
         };
+        ytEnhanceCard(card, ch);
         frag.appendChild(card);
     });
 
@@ -2476,6 +2763,7 @@ function performSearch(query) {
             card.className = 'card channel-card';
             card.innerHTML = `<img src="${getChannelCardImage(ch)}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${ch.name}</div>`;
             card.onclick = () => selectChannel(ch);
+            ytEnhanceCard(card, ch);
             grid.appendChild(card);
         });
     }
@@ -2607,9 +2895,10 @@ async function init() {
     currentChannelId = hashState.channelId || null;
     window.currentViewMode = hashState.viewMode || 'home';
     window.currentExternalUrl = hashState.externalUrl || '';
+    window.ytNav = hashState.yt || null;
 
     // تهيئة التاريخ بذكاء لمنع التحديث عند الرجوع
-    const isAtHome = currentStack.length === 0 && !currentChannelId && window.currentViewMode === 'home';
+    const isAtHome = currentStack.length === 0 && !currentChannelId && window.currentViewMode === 'home' && !window.ytNav;
     
     if (!window.history.state) {
         if (!isAtHome) {
@@ -2662,7 +2951,7 @@ async function init() {
         });
         categoriesCache = map;
         // تحديث العرض فقط إذا لم نكن في المشغل
-        if (!currentChannelId) renderCurrentView();
+        if (!currentChannelId && !(window.ytNav && window.ytNav.ch)) renderCurrentView();
     });
 
     database.ref('channels').on('value', (snapshot) => {
@@ -2670,7 +2959,7 @@ async function init() {
         snapshot.forEach(ch => { list.push({ id: ch.key, ...ch.val() }); });
         channelsCache = list;
         // تحديث العرض فقط إذا لم نكن في المشغل
-        if (!currentChannelId) renderCurrentView();
+        if (!currentChannelId && !(window.ytNav && window.ytNav.ch)) renderCurrentView();
     });
 }
 
@@ -2771,6 +3060,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // إفراغ الستاك والعودة لعرض الأقسام الجذرية
             currentStack = [];
             currentChannelId = null;
+            window.ytNav = null;
             window.currentViewMode = 'home'; 
             window.currentExternalUrl = '';
             homeNav.classList.add('active'); 
