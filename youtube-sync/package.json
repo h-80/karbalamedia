@@ -1,1 +1,8 @@
-
+{
+  "name": "karbalamedia-youtube-sync",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "sync": "node sync.mjs", "dry": "DRY_RUN=true node sync.mjs" },
+  "dependencies": { "firebase-admin": "^12.7.0" }
+}
