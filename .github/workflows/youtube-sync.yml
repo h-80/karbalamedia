@@ -1,1 +1,40 @@
-.github
+name: YouTube Sync
+
+on:
+  # يشتغل تلقائياً كل يوم الساعة 03:00 بتوقيت غرينتش
+  schedule:
+    - cron: '0 3 * * *'
+  # يشتغل فور تعديل ملف الخطة
+  push:
+    paths:
+      - 'youtube-sync/plan.txt'
+  # تشغيل يدوي من تبويب Actions
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'تجربة فقط بدون أي كتابة في الموقع'
+        type: boolean
+        default: false
+
+concurrency:
+  group: youtube-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: تثبيت الحزم
+        run: npm install --no-audit --no-fund --prefix youtube-sync
+      - name: مزامنة القنوات
+        working-directory: youtube-sync
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: node sync.mjs
