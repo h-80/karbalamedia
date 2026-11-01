@@ -2446,10 +2446,10 @@ function ytThumb(t) {
 }
 
 async function ytFetchChannel(params) {
-    const j = await ytApi('channels', Object.assign({ part: 'snippet' }, params));
+    const j = await ytApi('channels', Object.assign({ part: 'snippet,statistics' }, params));
     const c = (j.items || [])[0];
     if (!c) throw new Error('لم يتم العثور على القناة');
-    return { id: c.id, title: c.snippet.title, thumb: ytThumb(c.snippet.thumbnails) };
+    return { id: c.id, title: c.snippet.title, thumb: ytThumb(c.snippet.thumbnails), videoCount: c.statistics && c.statistics.videoCount != null ? Number(c.statistics.videoCount) : null };
 }
 
 function ytResolveChannelLink(url) {
@@ -2551,8 +2551,12 @@ async function renderYouTubeView() {
     ytMessage(grid, 'جاري التحميل...');
     try {
         const ch = await ytGetChannel(nav.ch);
-        const pls = await ytGetPlaylists(nav.ch);
+        const realPls = await ytGetPlaylists(nav.ch);
         if (token !== ytRenderToken) return;
+        // قائمة "كل الفيديوهات" = قائمة رفع القناة (UU...)، تضم الفيديوهات حتى لو ليست في أي قائمة
+        const all = [];
+        if (/^UC/.test(nav.ch)) all.push({ id: 'UU' + nav.ch.slice(2), title: 'كل الفيديوهات', thumb: ch.thumb, count: ch.videoCount });
+        const pls = all.concat(realPls);
         const frag = document.createDocumentFragment();
 
         if (!nav.pl) {
@@ -2560,7 +2564,7 @@ async function renderYouTubeView() {
             if (!pls.length) { ytMessage(grid, 'لا توجد قوائم تشغيل في هذه القناة'); return; }
             frag.appendChild(ytTitleBar(ch.title));
             pls.forEach(p => {
-                frag.appendChild(ytMakeCard(p.thumb, p.title, p.count + ' فيديو', () => {
+                frag.appendChild(ytMakeCard(p.thumb, p.title, (p.count != null ? p.count + ' فيديو' : ''), () => {
                     window.ytNav = { ch: nav.ch, pl: p.id };
                     pushState();
                     renderCurrentView();
@@ -2570,7 +2574,9 @@ async function renderYouTubeView() {
         } else {
             // مستوى فيديوهات القائمة
             const pl = pls.find(p => p.id === nav.pl);
-            const vids = await ytGetVideos(nav.pl);
+            let vids = [];
+            try { vids = await ytGetVideos(nav.pl); }
+            catch (err) { if (!/playlistNotFound|not\s*found/i.test(String(err && err.message))) throw err; }
             if (token !== ytRenderToken) return;
             if (!vids.length) { ytMessage(grid, 'لا توجد فيديوهات متاحة في هذه القائمة'); return; }
             frag.appendChild(ytTitleBar((pl ? pl.title : 'قائمة التشغيل') + ' - ' + ch.title));
