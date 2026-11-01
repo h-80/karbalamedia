@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
-const DEFAULT_DB_URL = 'https://karbala-media80-default-rtdb.firebaseio.com';
+const DEFAULT_DB_URL = 'https://karbalamedia80-default-rtdb.firebaseio.com';
 const DEFAULT_REFERER = 'https://h-80.github.io/';
 
 // ---------- قراءة صيغ القنوات ----------
@@ -205,7 +205,32 @@ export function makeYouTubeFetcher(apiKey, referer = DEFAULT_REFERER) {
     };
 }
 
-// ---------- Firebase (عند التشغيل الفعلي فقط) ----------
+// ---------- Firebase عبر الرابط المباشر (REST) بدون مفتاح، مثل لوحة التحكم ----------
+export function makeRestDb(dbUrl) {
+    const base = dbUrl.replace(/\/+$/, '');
+    async function call(method, p, body) {
+        const r = await fetch(`${base}/${p}.json`, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: body === undefined ? undefined : JSON.stringify(body)
+        });
+        let j = null;
+        try { j = await r.json(); } catch (e) {}
+        if (!r.ok) {
+            const why = j && j.error ? j.error : ('HTTP ' + r.status);
+            throw new Error(`Firebase رفض العملية (${method} ${p}): ${why}`);
+        }
+        return j;
+    }
+    return {
+        getAll: async p => (await call('GET', p)) || {},
+        push: async (p, data) => (await call('POST', p, data)).name,
+        update: (p, data) => call('PATCH', p, data),
+        close: async () => {}
+    };
+}
+
+// ---------- Firebase بصلاحيات المدير (اختياري، إذا وُجد السر FIREBASE_SERVICE_ACCOUNT) ----------
 async function makeFirebaseDb(serviceAccountJson, dbUrl) {
     const admin = (await import('firebase-admin')).default;
     admin.initializeApp({ credential: admin.credential.cert(JSON.parse(serviceAccountJson)), databaseURL: dbUrl });
@@ -223,7 +248,6 @@ async function main() {
     const apiKey = process.env.YOUTUBE_API_KEY;
     const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
     if (!apiKey) throw new Error('السر YOUTUBE_API_KEY غير موجود في إعدادات GitHub');
-    if (!sa) throw new Error('السر FIREBASE_SERVICE_ACCOUNT غير موجود في إعدادات GitHub');
 
     const here = path.dirname(fileURLToPath(import.meta.url));
     const plan = parsePlan(readFileSync(path.join(here, 'plan.txt'), 'utf8'));
@@ -235,7 +259,8 @@ async function main() {
     console.log(`الخطة: ${plan.sections.length} قسم، ${total} قناة${dry ? ' (تجربة فقط، بدون كتابة)' : ''}`);
     if (!total) { console.log('الخطة فارغة، لا شيء للمزامنة.'); return; }
 
-    const db = await makeFirebaseDb(sa, process.env.FIREBASE_DATABASE_URL || DEFAULT_DB_URL);
+    const dbUrl = process.env.FIREBASE_DATABASE_URL || DEFAULT_DB_URL;
+    const db = sa ? await makeFirebaseDb(sa, dbUrl) : makeRestDb(dbUrl);
     try {
         const { stats, failures } = await syncPlan({
             plan, db, dry,
