@@ -4,6 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>كربلاء ميديا</title>
+    <script>
+    // واجهة الافتتاحية: تظهر مرة واحدة فقط عند فتح الموقع (لكل جلسة).
+    // التحديث أو الرجوع أو التنقل لا يُظهرها، ويُحسم هذا قبل أول رسم للصفحة حتى لا يحدث وميض.
+    (function () {
+        var seen = false;
+        try { seen = !!sessionStorage.getItem('splash_shown'); } catch (e) {}
+        try {
+            var nav = performance.getEntriesByType && performance.getEntriesByType('navigation')[0];
+            if (nav && (nav.type === 'reload' || nav.type === 'back_forward')) seen = true;
+        } catch (e) {}
+        window.__showSplash = !seen;
+        if (seen) document.documentElement.classList.add('splash-seen');
+        else { try { sessionStorage.setItem('splash_shown', 'true'); } catch (e) {} }
+    })();
+    </script>
     <style>
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@400;700&display=swap');
@@ -1053,6 +1068,7 @@ body {
     opacity: 0;
     visibility: hidden;
 }
+html.splash-seen #splash-screen { display: none !important; }
 
 .exit-content {
     text-align: center;
@@ -1437,8 +1453,8 @@ function cleanupAllPlayers() {
     const allIframes = document.querySelectorAll('iframe');
     allIframes.forEach(iframe => {
         try {
-            if (iframe.id !== 'externalLinkIframe') {
-                iframe.src = '';
+            if (iframe.id !== 'externalLinkIframe' && iframe.getAttribute('src')) {
+                swapIframe(iframe, '');
             }
         } catch (e) {}
     });
@@ -1607,6 +1623,36 @@ function getYouTubeID(url) {
     return m ? m[1] : null;
 }
 
+// تغيير src على iframe موجود يضيف عنصراً في سجل المتصفح (يظهر كأن زر الرجوع لا يعمل ويُلغي زر التقدّم).
+// لذلك نستبدل العنصر بنسخة جديدة يُحدَّد رابطها قبل إدراجها، وهذا لا يضيف شيئاً للسجل.
+function swapIframe(iframe, url) {
+    if (!iframe || !iframe.parentNode) return iframe;
+    const fresh = iframe.cloneNode(false);
+    if (url) fresh.setAttribute('src', url); else fresh.removeAttribute('src');
+    iframe.parentNode.replaceChild(fresh, iframe);
+    return fresh;
+}
+
+// يعيد كائن قناة لمعرّف موجود في الرابط (#...|id)، بما فيها فيديوهات يوتيوب وروابط الأقسام التي لا تُخزَّن كقنوات
+function findChannelById(id) {
+    if (!id) return null;
+    const found = (channelsCache || []).find(ch => ch.id === id);
+    if (found) return found;
+    const sid = String(id);
+    if (sid.indexOf('yt_') === 0) {
+        const vid = sid.slice(3);
+        if (/^[\w-]{11}$/.test(vid)) {
+            return { id: sid, name: 'يوتيوب', img: '', links: { main: { label: 'يوتيوب', url: 'https://www.youtube.com/watch?v=' + vid } } };
+        }
+    }
+    if (sid.indexOf('cat_') === 0) {
+        const cat = categoriesCache[sid.slice(4)];
+        const url = cat ? String(cat.link || cat.url || cat.externalLink || '').trim() : '';
+        if (url && getYouTubeID(url)) return { id: sid, name: cat.name || 'رابط يوتيوب', img: cat.img, links: { main: { label: 'بث يوتيوب', url } } };
+    }
+    return null;
+}
+
 window.addEventListener('popstate', (event) => {
     // إيقاف المشغلات فوراً لضمان توقف الصوت
     cleanupAllPlayers();
@@ -1638,7 +1684,7 @@ window.addEventListener('popstate', (event) => {
     
     // تشغيل القناة إذا كانت الحالة تتضمن قناة
     if (currentChannelId) {
-        const channel = (channelsCache || []).find(ch => ch.id === currentChannelId);
+        const channel = findChannelById(currentChannelId);
         if (channel) {
             selectChannel(channel, false);
         } else {
@@ -1682,6 +1728,11 @@ function applyViewMode() {
         document.body.classList.remove('player-open');
     }
 
+    if (window.currentViewMode !== 'externalLink') {
+        const extFrame = $('externalLinkIframe');
+        if (extFrame && extFrame.getAttribute('src')) swapIframe(extFrame, '');
+    }
+
     if (window.currentViewMode === 'matches') {
         if (grid) grid.classList.add('hidden');
         if (matchesGrid) matchesGrid.classList.remove('hidden');
@@ -1703,7 +1754,7 @@ function applyViewMode() {
         if (externalLinkContainer) {
             externalLinkContainer.classList.remove('hidden');
             const iframe = $('externalLinkIframe');
-            if (iframe) iframe.src = window.currentExternalUrl;
+            if (iframe && iframe.getAttribute('src') !== window.currentExternalUrl) swapIframe(iframe, window.currentExternalUrl);
         }
         if (homeNav) homeNav.classList.add('active');
         if (matchesNav) matchesNav.classList.remove('active');
@@ -2254,9 +2305,9 @@ function setPlayerSource(url, engine = 'videojs', resetFallbacks = true) {
                         const id = getYouTubeID(url);
                         if (id) {
                             // استخدام الرابط الصحيح للتضمين مع إضافة المعلمات اللازمة لتجاوز الرفض
-                            iframe.src = `https://www.youtube.com/embed/${id}?autoplay=1&rel=0&playsinline=1&enablejsapi=1&origin=${window.location.origin}`;
+                            swapIframe(iframe, `https://www.youtube.com/embed/${id}?autoplay=1&rel=0&playsinline=1&enablejsapi=1&origin=${window.location.origin}`);
                         } else {
-                            iframe.src = url;
+                            swapIframe(iframe, url);
                         }
                     }
                 } catch(e) { fallbackToNextEngine(url); }
@@ -2875,8 +2926,8 @@ async function init() {
     if (appInitialized) return;
     appInitialized = true;
     
-    // منع ظهور صفحة البداية عند التحديث أو الرجوع في نفس الجلسة
-    const isReturning = sessionStorage.getItem('splash_shown');
+    // منع ظهور صفحة البداية عند التحديث أو الرجوع في نفس الجلسة (القرار يُتخذ في سكربت الـ head قبل الرسم)
+    const isReturning = window.__showSplash === false;
     const splash = document.getElementById('splash-screen');
     
     if (isReturning && splash) {
@@ -2927,7 +2978,7 @@ async function init() {
     }
 
     // التحقق من أن القناة الحالية موجودة بالفعل
-    if (currentChannelId && !channelsCache.some(ch => ch.id === currentChannelId)) {
+    if (currentChannelId && !findChannelById(currentChannelId)) {
         currentChannelId = null;
     }
 
@@ -2940,7 +2991,7 @@ async function init() {
 
     // تشغيل القناة إذا كانت موجودة في الرابط
     if (currentChannelId) {
-        const channel = channelsCache.find(ch => ch.id === currentChannelId);
+        const channel = findChannelById(currentChannelId);
         if (channel) await selectChannel(channel, false);
     }
 
@@ -3109,7 +3160,7 @@ function closeExternalLink() {
     const matchesNav = $('matchesNav');
     if (homeNav) homeNav.classList.add('active');
     if (matchesNav) matchesNav.classList.remove('active');
-    if ($('externalLinkIframe')) $('externalLinkIframe').src = '';
+    if ($('externalLinkIframe') && $('externalLinkIframe').getAttribute('src')) swapIframe($('externalLinkIframe'), '');
     pushState();
 }
 
