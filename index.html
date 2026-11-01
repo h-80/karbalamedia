@@ -3070,10 +3070,17 @@ function ytEnhanceCard(card, ch) {
 }
 // ================== نهاية قسم قنوات يوتيوب ==================
 
+// تهريب النصوص القادمة من قاعدة البيانات (أسماء قادمة من يوتيوب أو لوحة التحكم) قبل وضعها في innerHTML
+function escapeHtml(value) {
+    return String(value === null || value === undefined ? '' : value).replace(/[&<>"']/g, ch => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+    ));
+}
+
 function createCategoryCard(cat) {
     const card = document.createElement('div');
     card.className = 'card category-card';
-    card.innerHTML = `<img class="category-img" src="${cat.img || DEFAULT_IMAGE}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="category-title">${cat.name}</div>`;
+    card.innerHTML = `<img class="category-img" src="${escapeHtml(cat.img || DEFAULT_IMAGE)}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="category-title">${escapeHtml(cat.name)}</div>`;
     card.onclick = (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -3157,7 +3164,7 @@ async function renderCurrentView() {
     channels.forEach(ch => {
         const card = document.createElement('div');
         card.className = 'card channel-card';
-        card.innerHTML = `<img src="${getChannelCardImage(ch)}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${ch.name}</div>`;
+        card.innerHTML = `<img src="${escapeHtml(getChannelCardImage(ch))}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${escapeHtml(ch.name)}</div>`;
         card.onclick = (e) => {
             if (e) e.preventDefault();
             selectChannel(ch);
@@ -3209,7 +3216,7 @@ function performSearch(query) {
         channels.forEach(ch => {
             const card = document.createElement('div');
             card.className = 'card channel-card';
-            card.innerHTML = `<img src="${getChannelCardImage(ch)}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${ch.name}</div>`;
+            card.innerHTML = `<img src="${escapeHtml(getChannelCardImage(ch))}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${escapeHtml(ch.name)}</div>`;
             card.onclick = () => selectChannel(ch);
             ytEnhanceCard(card, ch);
             grid.appendChild(card);
