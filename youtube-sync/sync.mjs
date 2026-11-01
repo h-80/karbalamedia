@@ -387,13 +387,15 @@ export function makeYouTubeFetcher(apiKey, referer = DEFAULT_REFERER) {
             const p = (j.items || [])[0];
             if (!p) throw new Error('لم يتم العثور على قائمة التشغيل (قد تكون خاصة أو محذوفة)');
             const t = p.snippet.thumbnails || {};
+            // صورة القناة صاحبة القائمة (وإن تعذر جلبها نستخدم صورة القائمة)
+            const chInfo = await channelById(p.snippet.channelId).catch(() => null);
             return {
                 id: ref.playlistId,
                 channelId: p.snippet.channelId,
                 isPlaylist: true,
                 title: p.snippet.title,
                 handle: '',
-                thumb: (t.high || t.medium || t.default || {}).url || '',
+                thumb: (chInfo && chInfo.thumb) || (t.high || t.medium || t.default || {}).url || '',
                 videoCount: p.contentDetails ? Number(p.contentDetails.itemCount) : null
             };
         }
