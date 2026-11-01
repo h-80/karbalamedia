@@ -2588,6 +2588,7 @@ function ytParseChannelUrl(url) {
         if (!/(^|\.)youtube\.com$/i.test(u.hostname)) return null;
         const seg = u.pathname.split('/').filter(Boolean);
         if (!seg.length) return null;
+        if (seg[0] === 'playlist' && u.searchParams.get('list')) return { playlistId: u.searchParams.get('list') };
         if (seg[0].startsWith('@')) return { forHandle: decodeURIComponent(seg[0]) };
         if (seg[0] === 'channel' && seg[1]) return { id: seg[1] };
         if (seg[0] === 'user' && seg[1]) return { forUsername: decodeURIComponent(seg[1]) };
@@ -2646,6 +2647,15 @@ async function ytFetchChannel(params) {
 function ytResolveChannelLink(url) {
     const p = ytParseChannelUrl(url);
     if (!p) return Promise.reject(new Error('رابط قناة غير صالح'));
+    // رابط قائمة تشغيل: تُفتح القائمة وحدها (وليس القناة كاملة)
+    if (p.playlistId) {
+        return ytCached('chl:' + url, async () => {
+            const j = await ytApi('playlists', { part: 'snippet', id: p.playlistId });
+            const pl = (j.items || [])[0];
+            if (!pl) throw new Error('لم يتم العثور على قائمة التشغيل');
+            return { id: pl.snippet.channelId, pl: p.playlistId, title: pl.snippet.title, thumb: ytThumb(pl.snippet.thumbnails), banner: '', videoCount: null };
+        });
+    }
     return ytCached('chl:' + url, () => ytFetchChannel(p));
 }
 function ytGetChannel(id) {
@@ -3050,7 +3060,7 @@ async function openYouTubeChannel(url) {
     if (grid) ytMessage(grid, 'جاري التحميل...');
     try {
         const info = await ytResolveChannelLink(url);
-        window.ytNav = { ch: info.id, pl: '' };
+        window.ytNav = { ch: info.id, pl: info.pl || '' };
         pushState();
         renderCurrentView();
         window.scrollTo(0, 0);
