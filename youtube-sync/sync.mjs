@@ -43,26 +43,37 @@ export function canonicalLink(ref, resolvedId) {
 }
 
 // ---------- قراءة ملف الخطة ----------
+// الصيغة: سطر باسم القسم، وتحته روابط القنوات (أو @اسم_القناة). السطر الذي ليس رابط قناة يُعتبر اسم قسم.
+// اختياري: [قسم] بين أقواس، أو قسم فرعي بالعلامة > مثل: رياضة > كرة القدم
 export function parsePlan(text) {
     const sections = [];
     const errors = [];
     let cur = null;
-    String(text).split(/\r?\n/).forEach((raw, i) => {
+    String(text).replace(/^\uFEFF/, '').split(/\r?\n/).forEach((raw, i) => {
         const line = raw.trim();
         const n = i + 1;
         if (!line || line.startsWith('#')) return;
-        const m = line.match(/^\[(.+)\]$/);
-        if (m) {
-            const names = m[1].split('>').map(x => x.trim()).filter(Boolean);
-            if (!names.length) { errors.push(`سطر ${n}: اسم القسم فارغ`); cur = null; return; }
-            cur = { path: names, line: n, entries: [] };
-            sections.push(cur);
+
+        const ref = parseChannelRef(line);
+        if (ref) {
+            if (!cur) { errors.push(`سطر ${n}: قناة بدون اسم قسم قبلها: ${line}`); return; }
+            cur.entries.push({ raw: line, ref, line: n });
             return;
         }
-        if (!cur) { errors.push(`سطر ${n}: قناة بدون قسم قبلها: ${line}`); return; }
-        const ref = parseChannelRef(line);
-        if (!ref) { errors.push(`سطر ${n}: رابط قناة غير مفهوم: ${line}`); return; }
-        cur.entries.push({ raw: line, ref, line: n });
+        // روابط لا نفهمها (غير قنوات يوتيوب) لا تُعتبر اسم قسم
+        if (/^https?:\/\//i.test(line) || /youtube\.com|youtu\.be/i.test(line)) {
+            errors.push(`سطر ${n}: رابط قناة غير مفهوم (استخدم رابط قناة أو @اسم): ${line}`);
+            return;
+        }
+        let title = line;
+        const br = line.match(/^\[(.*)\]$/);
+        if (br) title = br[1];
+        else if (/[\[\]]/.test(line)) { errors.push(`سطر ${n}: أقواس غير صحيحة: ${line}`); return; }
+        title = title.replace(/[:：]+\s*$/, '');
+        const names = title.split('>').map(x => x.trim()).filter(Boolean);
+        if (!names.length) { errors.push(`سطر ${n}: اسم القسم فارغ`); cur = null; return; }
+        cur = { path: names, line: n, entries: [] };
+        sections.push(cur);
     });
     return { sections, errors };
 }
