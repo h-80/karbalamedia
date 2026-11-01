@@ -10,8 +10,8 @@
 #
 #  مثال (احذف علامة # من بداية الأسطر لتفعيله):
 #
-#  رياضة
-#  https://www.youtube.com/@Google/playlists
+#  اللطميات
+#  https://www.youtube.com/@MurtazaHarb
 #  @GoogleDevelopers
 #
 #  أطفال
