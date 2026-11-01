@@ -179,13 +179,13 @@ function channelRefKeys(ch) {
 const STATE_PATH = 'youtube-sync-state';
 const hash = s => createHash('sha1').update(String(s)).digest('hex').slice(0, 20);
 
-async function loadState(db) {
+async function loadState(db, log = console.log) {
     let raw;
     try { raw = (await db.getAll(STATE_PATH)) || {}; }
     catch (e) {
-        throw new Error('تعذر قراءة ذاكرة السكربت (' + STATE_PATH + '): ' + e.message +
-            ' — لن تُضاف أي قنوات حتى يُحل هذا. افتح Firebase > Realtime Database > Rules واسمح بالقراءة والكتابة للمسار ' + STATE_PATH +
-            ' (أو أضف السر FIREBASE_SERVICE_ACCOUNT في GitHub ليعمل السكربت بصلاحيات المدير)');
+        // لم تعد هذه المشكلة توقف المزامنة: نكمل بدون ذاكرة (الخطة هي المرجع)
+        log('  ⚠ تعذر قراءة ذاكرة السكربت (' + STATE_PATH + '): ' + e.message + ' — سيكمل السكربت بدونها');
+        raw = {};
     }
     return { categories: raw.categories || {}, channels: raw.channels || {} };
 }
@@ -228,7 +228,7 @@ async function ensureCategory(db, cats, state, pending, names, { dry, ignoreStat
 export async function syncPlan({ plan, db, fetchChannel, dry = false, ignoreState = false, log = console.log }) {
     const cats = await db.getAll('categories');
     const chans = await db.getAll('channels');
-    const state = await loadState(db);
+    const state = await loadState(db, log);
     const pending = { categories: {}, channels: {} };
     const infoCache = {};
     const stats = { created: 0, existing: 0, removed: 0, failed: 0, categories: 0 };
@@ -270,8 +270,16 @@ export async function syncPlan({ plan, db, fetchChannel, dry = false, ignoreStat
                         const exIds = channelCategoryIds(chans[existingId]);
                         const exNames = exIds.map(id => cats[id] ? cats[id].name : '').filter(Boolean);
                         const here = exIds.includes(String(catId));
-                        log(`  = ${info.title}: موجودة مسبقاً${exNames.length ? ' في: ' + exNames.join('، ') : ''}، تُركت كما هي` +
-                            (here ? '' : ` (⚠ ليست ضمن قسم "${sec.path.join(' > ')}" — أضفها له من لوحة التحكم إن أردت)`));
+                        if (here) {
+                            log(`  = ${info.title}: موجودة مسبقاً في القسم، تُركت كما هي`);
+                        } else {
+                            // القناة موجودة لكن ليست في هذا القسم: نضيف القسم إليها (بدون حذف أقسامها الحالية)
+                            const merged = Array.from(new Set([...exIds, String(catId)]));
+                            if (!dry) await db.update('channels/' + existingId, { categoryIds: merged, categoryId: merged[0] });
+                            chans[existingId].categoryIds = merged;
+                            chans[existingId].categoryId = merged[0];
+                            log(`  ~ ${info.title}: موجودة${exNames.length ? ' في: ' + exNames.join('، ') : ''}، أُضيف لها القسم "${sec.path.join(' > ')}"`);
+                        }
                         continue;
                     }
                     if (state.channels[sk] && !ignoreState) {
@@ -308,9 +316,7 @@ export async function syncPlan({ plan, db, fetchChannel, dry = false, ignoreStat
                 if (Object.keys(pending.categories).length) await db.update(STATE_PATH + '/categories', pending.categories);
                 if (Object.keys(pending.channels).length) await db.update(STATE_PATH + '/channels', pending.channels);
             } catch (err) {
-                stats.failed++;
-                failures.push('تعذر حفظ ذاكرة السكربت: ' + err.message);
-                log('  ! تعذر حفظ ذاكرة السكربت: ' + err.message);
+                log('  ⚠ تعذر حفظ ذاكرة السكربت (لا يؤثر على القنوات): ' + err.message);
             }
         }
     }
@@ -428,7 +434,8 @@ async function makeFirebaseDb(serviceAccountJson, dbUrl) {
 
 async function main() {
     const dry = String(process.env.DRY_RUN || '').toLowerCase() === 'true';
-    const ignoreState = String(process.env.RESET_DELETED || '').toLowerCase() === 'true';
+    // الخطة هي المرجع: ما هو مكتوب فيها يُنشأ دائماً إن لم يكن موجوداً. للحفاظ على ما حذفته يدوياً ضع KEEP_DELETED=true
+    const ignoreState = String(process.env.KEEP_DELETED || '').toLowerCase() !== 'true';
     const apiKey = process.env.YOUTUBE_API_KEY;
     const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
     if (!apiKey) throw new Error('السر YOUTUBE_API_KEY غير موجود في إعدادات GitHub');
