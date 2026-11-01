@@ -11,27 +11,80 @@ import path from 'node:path';
 const DEFAULT_DB_URL = 'https://karbalamedia80-default-rtdb.firebaseio.com';
 const DEFAULT_REFERER = 'https://h-80.github.io/';
 
-// ---------- قراءة صيغ القنوات ----------
-export function parseChannelRef(input) {
+// ---------- قراءة صيغ روابط يوتيوب ----------
+// الصيغ المدعومة (كلها تُحوَّل في النهاية إلى القناة صاحبة الرابط):
+//   - قناة: UC... / @handle / youtube.com/@handle (مع /videos /live /streams /playlists ...) / /channel/UC... / /user/اسم / /c/اسم / youtube.com/اسم
+//   - فيديو أو بث مباشر: watch?v= / youtu.be/ / shorts/ / live/ / embed/ / v/ / e/ / m.youtube.com / music.youtube.com / youtube-nocookie.com / attribution_link
+//   - قائمة تشغيل: playlist?list= / watch?list= (بدون v) / embed/videoseries?list= / youtu.be/...?list=
+const VIDEO_ID_RE = /^[\w-]{11}$/;
+const PLAYLIST_ID_RE = /^[\w-]{12,}$/;
+const YT_HOST_RE = /(^|\.)(youtube|youtube-nocookie)\.com$/i;
+const YT_SHORT_HOST_RE = /(^|\.)youtu\.be$/i;
+// مسارات من الدرجة الأولى في يوتيوب ليست أسماء قنوات (تمنع اعتبارها اسم قناة قديم)
+const RESERVED_PATHS = new Set([
+    'watch', 'playlist', 'shorts', 'live', 'embed', 'v', 'e', 'feed', 'results', 'hashtag', 'gaming', 'premium',
+    'account', 'channel', 'user', 'c', 'about', 'trending', 'podcasts', 'music', 'kids', 'tv', 'post', 'clip',
+    'redirect', 'oembed', 'signin', 'reporthistory', 'playlists', 'videos', 'upload', 'attribution_link',
+    'howyoutubeworks', 'select_site', 'supported_browsers', 'new', 'storefront', 'learning', 'movies', 'explore',
+    'history', 'subscription', 'subscriptions', 'channels', 'iframe_api', 'yt', 'static', 'embed_s'
+]);
+
+function videoOrPlaylist(videoId, listId) {
+    if (videoId && VIDEO_ID_RE.test(videoId)) return { videoId };
+    if (listId && PLAYLIST_ID_RE.test(listId)) return { playlistId: listId };
+    return null;
+}
+
+export function parseChannelRef(input, depth = 0) {
     const s = String(input || '').trim();
     if (!s) return null;
     if (/^UC[\w-]{22}$/.test(s)) return { id: s };
-    if (s.startsWith('@')) return { forHandle: s };
+    if (s.startsWith('@')) return { forHandle: s.split(/[\/?#\s]/)[0] };
     let u;
     try { u = new URL(/^https?:\/\//i.test(s) ? s : 'https://' + s); } catch (e) { return null; }
-    if (!/(^|\.)youtube\.com$/i.test(u.hostname)) return null;
-    const seg = u.pathname.split('/').filter(Boolean).map(x => { try { return decodeURIComponent(x); } catch (e) { return x; } });
+    const host = u.hostname;
+    const dec = x => { try { return decodeURIComponent(x); } catch (e) { return x; } };
+    const seg = u.pathname.split('/').filter(Boolean).map(dec);
+    const qv = u.searchParams.get('v');
+    const ql = u.searchParams.get('list');
+
+    // youtu.be/VIDEO_ID
+    if (YT_SHORT_HOST_RE.test(host)) return videoOrPlaylist(seg[0], ql);
+
+    if (!YT_HOST_RE.test(host)) return null;
     if (!seg.length) return null;
-    if (seg[0].startsWith('@')) return { forHandle: seg[0] };
-    if (seg[0] === 'channel' && seg[1]) return { id: seg[1] };
-    if (seg[0] === 'user' && seg[1]) return { forUsername: seg[1] };
-    if (seg[0] === 'c' && seg[1]) return { forHandle: '@' + seg[1] };
+    const first = seg[0];
+
+    // قنوات
+    if (first.startsWith('@')) return { forHandle: first };
+    if (first === 'channel' && seg[1]) return /^UC[\w-]{22}$/.test(seg[1]) ? { id: seg[1] } : null;
+    if (first === 'user' && seg[1]) return { forUsername: seg[1] };
+    if (first === 'c' && seg[1]) return { forHandle: '@' + seg[1], legacy: true };
+
+    // فيديوهات وبث مباشر
+    if (first === 'watch') return videoOrPlaylist(qv, ql);
+    if (['shorts', 'live', 'embed', 'v', 'e'].includes(first)) {
+        if (first === 'embed' && seg[1] === 'videoseries') return videoOrPlaylist(null, ql);
+        return videoOrPlaylist(seg[1], ql);
+    }
+    // قوائم التشغيل
+    if (first === 'playlist') return videoOrPlaylist(null, ql);
+    // روابط المشاركة المقنّعة: /attribution_link?u=/watch?v=...
+    if (first === 'attribution_link' && depth < 2) {
+        const inner = u.searchParams.get('u');
+        return inner ? parseChannelRef('https://www.youtube.com' + (inner.startsWith('/') ? inner : '/' + inner), depth + 1) : null;
+    }
+
+    // اسم قناة قديم مباشر: youtube.com/اسم
+    if (!RESERVED_PATHS.has(first.toLowerCase())) return { forHandle: '@' + first, legacy: true };
     return null;
 }
 
 export function refKey(ref) {
     if (!ref) return '';
     if (ref.id) return 'id:' + ref.id;
+    if (ref.videoId) return 'v:' + ref.videoId;
+    if (ref.playlistId) return 'p:' + ref.playlistId;
     if (ref.forHandle) return 'h:' + ref.forHandle.toLowerCase();
     if (ref.forUsername) return 'u:' + ref.forUsername.toLowerCase();
     return '';
@@ -41,11 +94,12 @@ export function canonicalLink(ref, resolvedId) {
     if (resolvedId) return 'https://www.youtube.com/channel/' + resolvedId + '/playlists';
     if (ref.id) return 'https://www.youtube.com/channel/' + ref.id + '/playlists';
     if (ref.forHandle) return 'https://www.youtube.com/' + encodeURI(ref.forHandle) + '/playlists';
-    return 'https://www.youtube.com/user/' + encodeURI(ref.forUsername) + '/playlists';
+    if (ref.forUsername) return 'https://www.youtube.com/user/' + encodeURI(ref.forUsername) + '/playlists';
+    return '';
 }
 
 // ---------- قراءة ملف الخطة ----------
-// الصيغة: سطر باسم القسم، وتحته روابط القنوات (أو @اسم_القناة). السطر الذي ليس رابط قناة يُعتبر اسم قسم.
+// الصيغة: سطر باسم القسم، وتحته روابط يوتيوب (قناة / فيديو / بث / شورتس / قائمة تشغيل / @اسم). السطر الذي ليس رابط يوتيوب يُعتبر اسم قسم.
 // اختياري: [قسم] بين أقواس، أو قسم فرعي بالعلامة > مثل: رياضة > كرة القدم
 export function parsePlan(text) {
     const sections = [];
@@ -64,7 +118,7 @@ export function parsePlan(text) {
         }
         // روابط لا نفهمها (غير قنوات يوتيوب) لا تُعتبر اسم قسم
         if (/^https?:\/\//i.test(line) || /youtube\.com|youtu\.be/i.test(line)) {
-            errors.push(`سطر ${n}: رابط قناة غير مفهوم (استخدم رابط قناة أو @اسم): ${line}`);
+            errors.push(`سطر ${n}: رابط يوتيوب غير مفهوم (استخدم رابط قناة أو فيديو أو بث أو قائمة تشغيل أو @اسم): ${line}`);
             return;
         }
         let title = line;
@@ -239,13 +293,11 @@ export async function syncPlan({ plan, db, fetchChannel, dry = false, ignoreStat
 }
 
 // ---------- يوتيوب ----------
+// أي رابط (قناة، فيديو، بث، قائمة تشغيل) يُحوَّل هنا إلى بيانات القناة صاحبة الرابط
 export function makeYouTubeFetcher(apiKey, referer = DEFAULT_REFERER) {
-    return async function fetchChannel(ref) {
-        const q = new URLSearchParams({ part: 'snippet,statistics', key: apiKey });
-        if (ref.id) q.set('id', ref.id);
-        else if (ref.forHandle) q.set('forHandle', ref.forHandle);
-        else if (ref.forUsername) q.set('forUsername', ref.forUsername);
-        const r = await fetch('https://www.googleapis.com/youtube/v3/channels?' + q.toString(), { headers: { Referer: referer } });
+    async function api(endpoint, params) {
+        const q = new URLSearchParams({ key: apiKey, ...params });
+        const r = await fetch('https://www.googleapis.com/youtube/v3/' + endpoint + '?' + q.toString(), { headers: { Referer: referer } });
         let j;
         try { j = await r.json(); } catch (e) { throw new Error('رد غير مفهوم من يوتيوب'); }
         if (j.error) {
@@ -253,8 +305,10 @@ export function makeYouTubeFetcher(apiKey, referer = DEFAULT_REFERER) {
             if (/referer|referrer|blocked/i.test(msg)) throw new Error(msg + ' (راجع تقييد مفتاح يوتيوب: يجب أن يسمح بـ ' + referer + '*)');
             throw new Error(msg);
         }
-        const c = (j.items || [])[0];
-        if (!c) throw new Error('لم يتم العثور على القناة');
+        return j;
+    }
+
+    const toInfo = c => {
         const t = c.snippet.thumbnails || {};
         return {
             id: c.id,
@@ -263,6 +317,48 @@ export function makeYouTubeFetcher(apiKey, referer = DEFAULT_REFERER) {
             thumb: (t.high || t.medium || t.default || {}).url || '',
             videoCount: c.statistics ? Number(c.statistics.videoCount) : null
         };
+    };
+
+    const byId = new Map();
+    const remember = info => { byId.set(info.id, info); return info; };
+
+    async function channelBy(params) {
+        const j = await api('channels', { part: 'snippet,statistics', ...params });
+        return (j.items || [])[0] || null;
+    }
+    async function channelById(id) {
+        if (byId.has(id)) return byId.get(id);
+        const c = await channelBy({ id });
+        if (!c) throw new Error('لم يتم العثور على القناة');
+        return remember(toInfo(c));
+    }
+
+    return async function fetchChannel(ref) {
+        // فيديو أو بث مباشر أو شورتس -> قناته
+        if (ref.videoId) {
+            const j = await api('videos', { part: 'snippet', id: ref.videoId });
+            const v = (j.items || [])[0];
+            if (!v) throw new Error('لم يتم العثور على الفيديو (قد يكون خاصاً أو محذوفاً)');
+            return channelById(v.snippet.channelId);
+        }
+        // قائمة تشغيل -> قناة صاحبها
+        if (ref.playlistId) {
+            const j = await api('playlists', { part: 'snippet', id: ref.playlistId });
+            const p = (j.items || [])[0];
+            if (!p) throw new Error('لم يتم العثور على قائمة التشغيل (قد تكون خاصة أو محذوفة)');
+            return channelById(p.snippet.channelId);
+        }
+        if (ref.id) return channelById(ref.id);
+
+        let c = null;
+        if (ref.forHandle) c = await channelBy({ forHandle: ref.forHandle });
+        if (!c && ref.forUsername) c = await channelBy({ forUsername: ref.forUsername });
+        // رابط قديم /c/اسم أو youtube.com/اسم قد يكون اسم مستخدم قديماً وليس @handle
+        if (!c && ref.legacy && ref.forHandle) c = await channelBy({ forUsername: ref.forHandle.replace(/^@/, '') });
+        if (!c) {
+            throw new Error('لم يتم العثور على القناة' + (ref.legacy ? ' (الرابط القديم غير قابل للتحويل، استخدم رابط @اسم أو /channel/UC... أو رابط أي فيديو للقناة)' : ''));
+        }
+        return remember(toInfo(c));
     };
 }
 
