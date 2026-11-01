@@ -3070,6 +3070,24 @@ async function openYouTubeChannel(url) {
     }
 }
 
+// قسم يحتوي قائمة تشغيل يوتيوب واحدة فقط (بدون أقسام فرعية ولا قنوات أخرى)؟ يرجع تلك القائمة وإلا null
+function ytSoloPlaylistChannel(catId) {
+    const id = String(catId);
+    const hasSubs = Object.values(categoriesCache || {}).some(c => normalizeParentId(c.parentId) === id);
+    if (hasSubs) return null;
+    const chs = (channelsCache || []).filter(ch => getChannelCategoryIds(ch).includes(id));
+    if (chs.length !== 1) return null;
+    const link = ytChannelLinkOf(chs[0]);
+    const p = link ? ytParseChannelUrl(link) : null;
+    return (p && p.playlistId) ? chs[0] : null;
+}
+// بيانات القناة صاحبة قائمة التشغيل (صورتها وغلافها)
+async function ytSoloPlaylistInfo(ch) {
+    let chId = ch.ytChannelId;
+    if (!chId) chId = (await ytResolveChannelLink(ytChannelLinkOf(ch))).id;
+    return ytGetChannel(chId);
+}
+
 // يجلب صورة القناة تلقائياً لكرت قناة يوتيوب إذا لم تُحدَّد صورة من لوحة التحكم
 function ytEnhanceCard(card, ch) {
     if (ch.img) return;
@@ -3091,6 +3109,12 @@ function createCategoryCard(cat) {
     const card = document.createElement('div');
     card.className = 'card category-card';
     card.innerHTML = `<img class="category-img" src="${escapeHtml(cat.img || DEFAULT_IMAGE)}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="category-title">${escapeHtml(cat.name)}</div>`;
+    // قسم فيه قائمة تشغيل واحدة فقط وبدون صورة محددة: نجلب صورة القناة صاحبة القائمة
+    if (!cat.img) {
+        const solo = ytSoloPlaylistChannel(cat.id);
+        const imgEl = card.querySelector('img');
+        if (solo && imgEl) ytSoloPlaylistInfo(solo).then(info => { if (info.thumb) imgEl.src = info.thumb; }).catch(() => {});
+    }
     card.onclick = (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -3188,6 +3212,15 @@ async function renderCurrentView() {
         grid.innerHTML = '<div class="empty-section-msg">عذراً، هذا القسم لا يحتوي على محتوى حالياً</div>';
     } else {
         grid.appendChild(frag);
+        // قسم فيه قائمة تشغيل واحدة فقط: نعرض غلاف القناة أعلى القسم
+        const solo = ytSoloPlaylistChannel(currentId);
+        if (solo) {
+            const cid = String(currentId);
+            ytSoloPlaylistInfo(solo).then(info => {
+                const stillHere = currentStack.length && String(currentStack[currentStack.length - 1]) === cid && !(window.ytNav && window.ytNav.ch);
+                if (info.banner && stillHere && !grid.querySelector('.yt-banner')) grid.insertBefore(ytBannerEl(info.banner), grid.firstChild);
+            }).catch(() => {});
+        }
     }
 }
 
