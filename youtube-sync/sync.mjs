@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
-const DEFAULT_DB_URL = 'https://karbalamedia80-default-rtdb.firebaseio.com';
+const DEFAULT_DB_URL = 'https://karbala-media80-default-rtdb.firebaseio.com';
 const DEFAULT_REFERER = 'https://h-80.github.io/';
 
 // ---------- قراءة صيغ القنوات ----------
