@@ -1916,7 +1916,7 @@ function buildHash(stack, channelId) {
     if (window.currentViewMode === 'matchesTable') return 'matchesTable';
     if (window.currentViewMode === 'externalLink' && window.currentExternalUrl) return `ext:${encodeURIComponent(window.currentExternalUrl)}`;
     const stackHash = serializeStack(stack);
-    const yt = (window.ytNav && window.ytNav.ch) ? '@' + window.ytNav.ch + (window.ytNav.pl ? '.' + window.ytNav.pl : '') : '';
+    const yt = (window.ytNav && window.ytNav.ch) ? '@' + window.ytNav.ch + (window.ytNav.pl ? '.' + window.ytNav.pl + (window.ytNav.solo ? '.s' : '') : '') : '';
     if (!stackHash && !channelId && !yt) return null;
     const base = channelId ? `${stackHash}|${channelId}` : stackHash;
     return base + yt;
@@ -2579,7 +2579,7 @@ const ytInflight = {};
 function ytParseHash(part) {
     if (!part) return null;
     const bits = part.split('.');
-    return bits[0] ? { ch: bits[0], pl: bits[1] || '' } : null;
+    return bits[0] ? { ch: bits[0], pl: bits[1] || '', solo: bits[2] === 's' } : null;
 }
 
 function ytParseChannelUrl(url) {
@@ -2653,7 +2653,9 @@ function ytResolveChannelLink(url) {
             const j = await ytApi('playlists', { part: 'snippet', id: p.playlistId });
             const pl = (j.items || [])[0];
             if (!pl) throw new Error('لم يتم العثور على قائمة التشغيل');
-            return { id: pl.snippet.channelId, pl: p.playlistId, title: pl.snippet.title, thumb: ytThumb(pl.snippet.thumbnails), banner: '', videoCount: null };
+            // صورة وغلاف القناة صاحبة القائمة (وليس صورة القائمة)
+            const c = await ytGetChannel(pl.snippet.channelId);
+            return { id: c.id, pl: p.playlistId, title: pl.snippet.title, thumb: c.thumb, banner: c.banner, videoCount: null };
         });
     }
     return ytCached('chl:' + url, () => ytFetchChannel(p));
@@ -3026,6 +3028,7 @@ async function renderYouTubeView() {
             catch (err) { if (!/playlistNotFound|not\s*found|cannot\s*be\s*found/i.test(String(err && err.message))) throw err; }
             if (token !== ytRenderToken) return;
             if (!vids.length) { ytMessage(grid, 'لا توجد فيديوهات متاحة في هذه القائمة'); return; }
+            if (nav.solo && ch.banner) frag.appendChild(ytBannerEl(ch.banner));
             frag.appendChild(ytTitleBar((isShortsView ? 'الشورتس' : (pl ? pl.title : 'قائمة التشغيل')) + ' - ' + ch.title));
             const shortsList = isShortsView ? vids.map(v => ({ id: v.id, title: v.title, thumb: ytShortThumb(v.id) })) : null;
             vids.forEach((v, i) => {
@@ -3060,7 +3063,7 @@ async function openYouTubeChannel(url) {
     if (grid) ytMessage(grid, 'جاري التحميل...');
     try {
         const info = await ytResolveChannelLink(url);
-        window.ytNav = { ch: info.id, pl: info.pl || '' };
+        window.ytNav = { ch: info.id, pl: info.pl || '', solo: !!info.pl };
         pushState();
         renderCurrentView();
         window.scrollTo(0, 0);
@@ -3070,27 +3073,9 @@ async function openYouTubeChannel(url) {
     }
 }
 
-// قسم يحتوي قائمة تشغيل يوتيوب واحدة فقط (بدون أقسام فرعية ولا قنوات أخرى)؟ يرجع تلك القائمة وإلا null
-function ytSoloPlaylistChannel(catId) {
-    const id = String(catId);
-    const hasSubs = Object.values(categoriesCache || {}).some(c => normalizeParentId(c.parentId) === id);
-    if (hasSubs) return null;
-    const chs = (channelsCache || []).filter(ch => getChannelCategoryIds(ch).includes(id));
-    if (chs.length !== 1) return null;
-    const link = ytChannelLinkOf(chs[0]);
-    const p = link ? ytParseChannelUrl(link) : null;
-    return (p && p.playlistId) ? chs[0] : null;
-}
-// بيانات القناة صاحبة قائمة التشغيل (صورتها وغلافها)
-async function ytSoloPlaylistInfo(ch) {
-    let chId = ch.ytChannelId;
-    if (!chId) chId = (await ytResolveChannelLink(ytChannelLinkOf(ch))).id;
-    return ytGetChannel(chId);
-}
-
 // يجلب صورة القناة تلقائياً لكرت قناة يوتيوب إذا لم تُحدَّد صورة من لوحة التحكم
 function ytEnhanceCard(card, ch) {
-    if (ch.img) return;
+    if (ch.img && !(ch.ytPlaylistId && ch.source === 'youtube-sync')) return;
     const link = ytChannelLinkOf(ch);
     if (!link) return;
     const img = card.querySelector('img');
@@ -3109,12 +3094,6 @@ function createCategoryCard(cat) {
     const card = document.createElement('div');
     card.className = 'card category-card';
     card.innerHTML = `<img class="category-img" src="${escapeHtml(cat.img || DEFAULT_IMAGE)}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="category-title">${escapeHtml(cat.name)}</div>`;
-    // قسم فيه قائمة تشغيل واحدة فقط وبدون صورة محددة: نجلب صورة القناة صاحبة القائمة
-    if (!cat.img) {
-        const solo = ytSoloPlaylistChannel(cat.id);
-        const imgEl = card.querySelector('img');
-        if (solo && imgEl) ytSoloPlaylistInfo(solo).then(info => { if (info.thumb) imgEl.src = info.thumb; }).catch(() => {});
-    }
     card.onclick = (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -3212,15 +3191,6 @@ async function renderCurrentView() {
         grid.innerHTML = '<div class="empty-section-msg">عذراً، هذا القسم لا يحتوي على محتوى حالياً</div>';
     } else {
         grid.appendChild(frag);
-        // قسم فيه قائمة تشغيل واحدة فقط: نعرض غلاف القناة أعلى القسم
-        const solo = ytSoloPlaylistChannel(currentId);
-        if (solo) {
-            const cid = String(currentId);
-            ytSoloPlaylistInfo(solo).then(info => {
-                const stillHere = currentStack.length && String(currentStack[currentStack.length - 1]) === cid && !(window.ytNav && window.ytNav.ch);
-                if (info.banner && stillHere && !grid.querySelector('.yt-banner')) grid.insertBefore(ytBannerEl(info.banner), grid.firstChild);
-            }).catch(() => {});
-        }
     }
 }
 
