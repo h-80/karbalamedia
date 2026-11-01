@@ -29,7 +29,12 @@ const RESERVED_PATHS = new Set([
     'history', 'subscription', 'subscriptions', 'channels', 'iframe_api', 'yt', 'static', 'embed_s'
 ]);
 
+// قوائم التشغيل الحقيقية (PL...) وألبومات الموسيقى (OLAK5uy_...)؛ أما قوائم الخلط التلقائية (RD...) فليست قوائم حقيقية
+const REAL_PLAYLIST_RE = /^(PL|OLAK5uy_)[\w-]{10,}$/;
+
 function videoOrPlaylist(videoId, listId) {
+    // رابط فيديو داخل قائمة حقيقية (watch?v=...&list=PL...) = المقصود القائمة نفسها
+    if (listId && REAL_PLAYLIST_RE.test(listId)) return { playlistId: listId };
     if (videoId && VIDEO_ID_RE.test(videoId)) return { videoId };
     if (listId && PLAYLIST_ID_RE.test(listId)) return { playlistId: listId };
     return null;
