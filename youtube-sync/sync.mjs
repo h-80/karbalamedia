@@ -1,12 +1,14 @@
 // مزامنة قنوات يوتيوب مع أقسام موقع كربلاء ميديا حسب ملف الخطة (plan.txt)
-// - يقرأ الخطة، يجلب اسم وصورة كل قناة من يوتيوب
-// - ينشئ القسم إن لم يكن موجوداً، وينشئ القناة داخله، أو يضيفها لقسمها إن كانت موجودة
-// - لا يحذف شيئاً ولا يعدّل اسم أو صورة قناة موجودة (حتى لا يفسد تعديلاتك اليدوية)
+// قاعدة العمل: السكربت يُنشئ فقط ما هو غير موجود، ولا يلمس ما أضفته أنت يدوياً أبداً.
+// - قناة موجودة مسبقاً (بأي طريقة أُضيفت): تُترك كما هي بدون أي تعديل
+// - ما حذفته أو غيّرت اسمه يدوياً: لا يُعاد إنشاؤه (السكربت يتذكر ما أنشأه/رآه سابقاً)
+// - لا يحذف شيئاً ولا يعدّل اسم أو صورة أو أقسام أي قناة موجودة
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
-const DEFAULT_DB_URL = 'https://karbala-media80-default-rtdb.firebaseio.com';
+const DEFAULT_DB_URL = 'https://karbalamedia80-default-rtdb.firebaseio.com';
 const DEFAULT_REFERER = 'https://h-80.github.io/';
 
 // ---------- قراءة صيغ القنوات ----------
@@ -107,15 +109,39 @@ function channelRefKeys(ch) {
     return keys;
 }
 
-async function ensureCategory(db, cats, names, dry, log) {
+// ---------- حالة المزامنة: ذاكرة السكربت حتى لا يُعيد ما حذفته أنت يدوياً ----------
+// تُحفظ في عقدة مستقلة youtube-sync-state لا يقرأها الموقع ولا لوحة التحكم
+const STATE_PATH = 'youtube-sync-state';
+const hash = s => createHash('sha1').update(String(s)).digest('hex').slice(0, 20);
+
+async function loadState(db) {
+    let raw;
+    try { raw = (await db.getAll(STATE_PATH)) || {}; }
+    catch (e) { throw new Error('تعذر قراءة ذاكرة السكربت (' + STATE_PATH + '): ' + e.message + ' — راجع قواعد Firebase'); }
+    return { categories: raw.categories || {}, channels: raw.channels || {} };
+}
+
+// يرجع معرّف القسم، أو null إذا كان القسم قد أُنشئ سابقاً ثم حذفته أو غيّرت اسمه يدوياً
+async function ensureCategory(db, cats, state, pending, names, { dry, ignoreState, log }) {
     let parentId = '';
-    for (const name of names) {
+    for (let i = 0; i < names.length; i++) {
+        const name = names[i];
+        const sk = hash('c|' + names.slice(0, i + 1).map(normName).join('>'));
         let found = Object.keys(cats).find(id => normName(cats[id].name) === normName(name) && normParent(cats[id].parentId) === parentId);
         if (!found) {
+            if (state.categories[sk] && !ignoreState) {
+                log(`  ⊘ القسم "${name}" كان موجوداً وحذفته أو غيّرت اسمه يدوياً، لن يُعاد إنشاؤه`);
+                return null;
+            }
             const data = { name, parentId, link: '', img: '' };
             found = dry ? 'DRY_' + Object.keys(cats).length : await db.push('categories', data);
             cats[found] = data;
             log(`  + قسم جديد: ${name}`);
+        }
+        if (!state.categories[sk]) {
+            const rec = { name, at: new Date().toISOString() };
+            state.categories[sk] = rec;
+            pending.categories[sk] = rec;
         }
         parentId = found;
     }
@@ -123,46 +149,57 @@ async function ensureCategory(db, cats, names, dry, log) {
 }
 
 // ---------- المزامنة ----------
-export async function syncPlan({ plan, db, fetchChannel, dry = false, log = console.log }) {
+export async function syncPlan({ plan, db, fetchChannel, dry = false, ignoreState = false, log = console.log }) {
     const cats = await db.getAll('categories');
     const chans = await db.getAll('channels');
+    const state = await loadState(db);
+    const pending = { categories: {}, channels: {} };
     const infoCache = {};
-    const stats = { created: 0, linked: 0, unchanged: 0, failed: 0, categories: 0 };
+    const stats = { created: 0, existing: 0, removed: 0, failed: 0, categories: 0 };
     const failures = [];
     const catCountBefore = Object.keys(cats).length;
 
-    for (const sec of plan.sections) {
-        log(`\n[${sec.path.join(' > ')}]`);
-        const catId = await ensureCategory(db, cats, sec.path, dry, log);
-        for (const e of sec.entries) {
-            const key = refKey(e.ref);
-            try {
-                if (!infoCache[key]) infoCache[key] = await fetchChannel(e.ref);
-                const info = infoCache[key];
-                const existingId = Object.keys(chans).find(id => {
-                    const keys = channelRefKeys(chans[id]);
-                    return keys.has('id:' + info.id) || keys.has(key);
-                });
+    try {
+        for (const sec of plan.sections) {
+            log(`\n[${sec.path.join(' > ')}]`);
+            const catId = await ensureCategory(db, cats, state, pending, sec.path, { dry, ignoreState, log });
+            if (catId === null) { stats.removed += sec.entries.length; continue; }
+            const secKey = sec.path.map(normName).join('>');
 
-                if (existingId) {
-                    const ch = chans[existingId];
-                    const ids = channelCategoryIds(ch);
-                    const patch = {};
-                    if (!ids.includes(String(catId))) {
-                        patch.categoryIds = [...ids, String(catId)];
-                        if (!ch.categoryId) patch.categoryId = String(catId);
+            for (const e of sec.entries) {
+                const key = refKey(e.ref);
+                try {
+                    if (!infoCache[key]) infoCache[key] = await fetchChannel(e.ref);
+                    const info = infoCache[key];
+                    const handle = info.handle ? (info.handle.startsWith('@') ? info.handle : '@' + info.handle) : '';
+                    const handleKey = handle ? 'h:' + handle.toLowerCase() : '';
+                    const sk = hash('h|' + secKey + '|' + info.id);
+
+                    // هل القناة موجودة أصلاً (أضفتها يدوياً أو أنشأها السكربت)؟ المطابقة بالمعرّف أو بالـ @handle أو بأي رابط محفوظ
+                    const existingId = Object.keys(chans).find(id => {
+                        const keys = channelRefKeys(chans[id]);
+                        return keys.has('id:' + info.id) || keys.has(key) || (handleKey && keys.has(handleKey));
+                    });
+
+                    const remember = () => {
+                        if (state.channels[sk]) return;
+                        const rec = { id: info.id, name: info.title, section: sec.path.join(' > '), at: new Date().toISOString() };
+                        state.channels[sk] = rec;
+                        pending.channels[sk] = rec;
+                    };
+
+                    if (existingId) {
+                        stats.existing++;
+                        remember();
+                        log(`  = ${info.title}: موجودة مسبقاً، تُركت كما هي`);
+                        continue;
                     }
-                    if (!ch.ytChannelId) patch.ytChannelId = info.id;
-                    if (Object.keys(patch).length) {
-                        if (!dry) await db.update('channels/' + existingId, patch);
-                        Object.assign(ch, patch);
-                        if (patch.categoryIds) { stats.linked++; log(`  ~ ${info.title}: أُضيفت لهذا القسم (كانت موجودة)`); }
-                        else stats.unchanged++;
-                    } else {
-                        stats.unchanged++;
-                        log(`  = ${info.title}: موجودة مسبقاً`);
+                    if (state.channels[sk] && !ignoreState) {
+                        stats.removed++;
+                        log(`  ⊘ ${info.title}: حذفتها يدوياً سابقاً، لن تُعاد`);
+                        continue;
                     }
-                } else {
+
                     const data = {
                         name: info.title,
                         img: info.thumb || '',
@@ -175,13 +212,25 @@ export async function syncPlan({ plan, db, fetchChannel, dry = false, log = cons
                     const newId = dry ? 'DRY_CH_' + Object.keys(chans).length : await db.push('channels', data);
                     chans[newId] = data;
                     stats.created++;
+                    remember();
                     const extra = info.videoCount != null ? ` (${info.videoCount} فيديو)` : '';
                     log(`  + ${info.title}${extra}`);
+                } catch (err) {
+                    stats.failed++;
+                    failures.push(`سطر ${e.line} (${e.raw}): ${err.message}`);
+                    log(`  ! فشل: ${e.raw} -> ${err.message}`);
                 }
+            }
+        }
+    } finally {
+        if (!dry) {
+            try {
+                if (Object.keys(pending.categories).length) await db.update(STATE_PATH + '/categories', pending.categories);
+                if (Object.keys(pending.channels).length) await db.update(STATE_PATH + '/channels', pending.channels);
             } catch (err) {
                 stats.failed++;
-                failures.push(`سطر ${e.line} (${e.raw}): ${err.message}`);
-                log(`  ! فشل: ${e.raw} -> ${err.message}`);
+                failures.push('تعذر حفظ ذاكرة السكربت: ' + err.message);
+                log('  ! تعذر حفظ ذاكرة السكربت: ' + err.message);
             }
         }
     }
@@ -210,6 +259,7 @@ export function makeYouTubeFetcher(apiKey, referer = DEFAULT_REFERER) {
         return {
             id: c.id,
             title: c.snippet.title,
+            handle: c.snippet.customUrl || '',
             thumb: (t.high || t.medium || t.default || {}).url || '',
             videoCount: c.statistics ? Number(c.statistics.videoCount) : null
         };
@@ -256,6 +306,7 @@ async function makeFirebaseDb(serviceAccountJson, dbUrl) {
 
 async function main() {
     const dry = String(process.env.DRY_RUN || '').toLowerCase() === 'true';
+    const ignoreState = String(process.env.RESET_DELETED || '').toLowerCase() === 'true';
     const apiKey = process.env.YOUTUBE_API_KEY;
     const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
     if (!apiKey) throw new Error('السر YOUTUBE_API_KEY غير موجود في إعدادات GitHub');
@@ -274,10 +325,11 @@ async function main() {
     const db = sa ? await makeFirebaseDb(sa, dbUrl) : makeRestDb(dbUrl);
     try {
         const { stats, failures } = await syncPlan({
-            plan, db, dry,
+            plan, db, dry, ignoreState,
             fetchChannel: makeYouTubeFetcher(apiKey, process.env.YT_REFERER || DEFAULT_REFERER)
         });
-        console.log(`\nالنتيجة: ${stats.created} قناة جديدة، ${stats.linked} أُضيفت لقسم، ${stats.unchanged} بدون تغيير، ${stats.categories} قسم جديد، ${stats.failed} فشل`);
+        console.log(`
+النتيجة: ${stats.created} قناة جديدة، ${stats.existing} موجودة (لم تُلمس)، ${stats.removed} محذوفة يدوياً (لم تُعد)، ${stats.categories} قسم جديد، ${stats.failed} فشل`);
         if (failures.length) { console.error('\nالإخفاقات:\n' + failures.join('\n')); process.exitCode = 1; }
     } finally {
         await db.close();
