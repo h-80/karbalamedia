@@ -15,6 +15,10 @@ on:
         description: 'تجربة فقط بدون أي كتابة في الموقع'
         type: boolean
         default: false
+      reset_deleted:
+        description: 'إعادة إنشاء ما حذفته يدوياً سابقاً (وهو موجود في الخطة)'
+        type: boolean
+        default: false
 
 concurrency:
   group: youtube-sync
@@ -37,4 +41,5 @@ jobs:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
+          RESET_DELETED: ${{ github.event.inputs.reset_deleted }}
         run: node sync.mjs
