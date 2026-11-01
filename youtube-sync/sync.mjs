@@ -141,6 +141,17 @@ function normParent(v) {
     return ['null', 'undefined', 'false', '0'].includes(s.toLowerCase()) ? '' : s;
 }
 const normName = s => String(s || '').trim().toLowerCase();
+// مطابقة أسماء الأقسام بتجاهل الفروق الإملائية الشائعة (القران/القرآن، الأفراح/الافراح، ة/ه، ى/ي، التشكيل)
+// تُستخدم للبحث عن القسم الموجود فقط، أما مفاتيح ذاكرة السكربت فتبقى بـ normName حتى لا تتغير الذاكرة السابقة
+const matchName = s => String(s || '')
+    .normalize('NFKC')
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
+    .replace(/[أإآٱ]/g, 'ا')
+    .replace(/ى/g, 'ي')
+    .replace(/ة/g, 'ه')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
 
 function channelCategoryIds(ch) {
     let ids = [];
@@ -171,7 +182,11 @@ const hash = s => createHash('sha1').update(String(s)).digest('hex').slice(0, 20
 async function loadState(db) {
     let raw;
     try { raw = (await db.getAll(STATE_PATH)) || {}; }
-    catch (e) { throw new Error('تعذر قراءة ذاكرة السكربت (' + STATE_PATH + '): ' + e.message + ' — راجع قواعد Firebase'); }
+    catch (e) {
+        throw new Error('تعذر قراءة ذاكرة السكربت (' + STATE_PATH + '): ' + e.message +
+            ' — لن تُضاف أي قنوات حتى يُحل هذا. افتح Firebase > Realtime Database > Rules واسمح بالقراءة والكتابة للمسار ' + STATE_PATH +
+            ' (أو أضف السر FIREBASE_SERVICE_ACCOUNT في GitHub ليعمل السكربت بصلاحيات المدير)');
+    }
     return { categories: raw.categories || {}, channels: raw.channels || {} };
 }
 
@@ -181,7 +196,14 @@ async function ensureCategory(db, cats, state, pending, names, { dry, ignoreStat
     for (let i = 0; i < names.length; i++) {
         const name = names[i];
         const sk = hash('c|' + names.slice(0, i + 1).map(normName).join('>'));
-        let found = Object.keys(cats).find(id => normName(cats[id].name) === normName(name) && normParent(cats[id].parentId) === parentId);
+        // يُفضَّل أقدم قسم مطابق (مفاتيح Firebase مرتبة زمنياً)، فيذهب المحتوى إلى القسم الذي أنشأته أنت لا إلى نسخة مكررة
+        const candidates = Object.keys(cats)
+            .filter(id => normParent(cats[id].parentId) === parentId && matchName(cats[id].name) === matchName(name))
+            .sort();
+        let found = candidates[0];
+        if (found && normName(cats[found].name) !== normName(name)) {
+            log(`  ~ القسم "${name}" طُوبق مع القسم الموجود "${cats[found].name}" (فرق إملائي بسيط)`);
+        }
         if (!found) {
             if (state.categories[sk] && !ignoreState) {
                 log(`  ⊘ القسم "${name}" كان موجوداً وحذفته أو غيّرت اسمه يدوياً، لن يُعاد إنشاؤه`);
@@ -245,7 +267,11 @@ export async function syncPlan({ plan, db, fetchChannel, dry = false, ignoreStat
                     if (existingId) {
                         stats.existing++;
                         remember();
-                        log(`  = ${info.title}: موجودة مسبقاً، تُركت كما هي`);
+                        const exIds = channelCategoryIds(chans[existingId]);
+                        const exNames = exIds.map(id => cats[id] ? cats[id].name : '').filter(Boolean);
+                        const here = exIds.includes(String(catId));
+                        log(`  = ${info.title}: موجودة مسبقاً${exNames.length ? ' في: ' + exNames.join('، ') : ''}، تُركت كما هي` +
+                            (here ? '' : ` (⚠ ليست ضمن قسم "${sec.path.join(' > ')}" — أضفها له من لوحة التحكم إن أردت)`));
                         continue;
                     }
                     if (state.channels[sk] && !ignoreState) {
