@@ -91,6 +91,7 @@ export function refKey(ref) {
 }
 
 export function canonicalLink(ref, resolvedId) {
+    if (ref.playlistId) return 'https://www.youtube.com/playlist?list=' + ref.playlistId;
     if (resolvedId) return 'https://www.youtube.com/channel/' + resolvedId + '/playlists';
     if (ref.id) return 'https://www.youtube.com/channel/' + ref.id + '/playlists';
     if (ref.forHandle) return 'https://www.youtube.com/' + encodeURI(ref.forHandle) + '/playlists';
@@ -165,6 +166,7 @@ function channelCategoryIds(ch) {
 function channelRefKeys(ch) {
     const keys = new Set();
     if (ch.ytChannelId) keys.add('id:' + ch.ytChannelId);
+    if (ch.ytPlaylistId) keys.add('p:' + ch.ytPlaylistId);
     const urls = [];
     if (ch.links && typeof ch.links === 'object') {
         Object.values(ch.links).forEach(l => urls.push(typeof l === 'string' ? l : (l && l.url)));
@@ -294,7 +296,8 @@ export async function syncPlan({ plan, db, fetchChannel, dry = false, ignoreStat
                         categoryIds: [String(catId)],
                         categoryId: String(catId),
                         links: { Main: { label: 'Main', url: canonicalLink(e.ref, info.id) } },
-                        ytChannelId: info.id,
+                        ytChannelId: info.channelId || info.id,
+                        ...(info.isPlaylist ? { ytPlaylistId: info.id } : {}),
                         source: 'youtube-sync'
                     };
                     const newId = dry ? 'DRY_CH_' + Object.keys(chans).length : await db.push('channels', data);
@@ -373,12 +376,21 @@ export function makeYouTubeFetcher(apiKey, referer = DEFAULT_REFERER) {
             if (!v) throw new Error('لم يتم العثور على الفيديو (قد يكون خاصاً أو محذوفاً)');
             return channelById(v.snippet.channelId);
         }
-        // قائمة تشغيل -> قناة صاحبها
+        // قائمة تشغيل -> تُضاف القائمة وحدها (وليس القناة كاملة)
         if (ref.playlistId) {
-            const j = await api('playlists', { part: 'snippet', id: ref.playlistId });
+            const j = await api('playlists', { part: 'snippet,contentDetails', id: ref.playlistId });
             const p = (j.items || [])[0];
             if (!p) throw new Error('لم يتم العثور على قائمة التشغيل (قد تكون خاصة أو محذوفة)');
-            return channelById(p.snippet.channelId);
+            const t = p.snippet.thumbnails || {};
+            return {
+                id: ref.playlistId,
+                channelId: p.snippet.channelId,
+                isPlaylist: true,
+                title: p.snippet.title,
+                handle: '',
+                thumb: (t.high || t.medium || t.default || {}).url || '',
+                videoCount: p.contentDetails ? Number(p.contentDetails.itemCount) : null
+            };
         }
         if (ref.id) return channelById(ref.id);
 
