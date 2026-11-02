@@ -43,6 +43,10 @@ class MainActivity : AppCompatActivity() {
     private val host = "appassets.androidplatform.net"
     private val startUrl = "https://$host/index.html"
 
+    // نطاق موقعك الرسمي (للمفتاح المقيَّد بالـ referrer)
+    private val siteOrigin = "https://h-80.github.io"
+    private val siteReferer = "https://h-80.github.io/karbalamedia/"
+
     private val assetLoader by lazy {
         WebViewAssetLoader.Builder()
             .setDomain(host)
@@ -138,7 +142,14 @@ class MainActivity : AppCompatActivity() {
         webView.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(
                 view: WebView, request: WebResourceRequest
-            ): WebResourceResponse? = assetLoader.shouldInterceptRequest(request.url)
+            ): WebResourceResponse? {
+                val url = request.url
+                // طلبات YouTube Data API: نرسلها بنفس نطاق الموقع حتى يقبلها المفتاح المقيَّد
+                if (url.host == "www.googleapis.com" && request.method == "GET") {
+                    youtubeApiRequest(url.toString())?.let { return it }
+                }
+                return assetLoader.shouldInterceptRequest(url)
+            }
 
             override fun shouldOverrideUrlLoading(
                 view: WebView, request: WebResourceRequest
@@ -198,6 +209,27 @@ class MainActivity : AppCompatActivity() {
 
             override fun getDefaultVideoPoster(): Bitmap? =
                 Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+        }
+    }
+
+    private fun youtubeApiRequest(url: String): WebResourceResponse? {
+        return try {
+            val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+            conn.connectTimeout = 15000
+            conn.readTimeout = 20000
+            conn.setRequestProperty("Referer", siteReferer)
+            conn.setRequestProperty("Origin", siteOrigin)
+            conn.setRequestProperty("Accept", "application/json")
+            val code = conn.responseCode
+            val stream = if (code in 200..399) conn.inputStream else conn.errorStream
+            WebResourceResponse(
+                "application/json", "UTF-8", code,
+                conn.responseMessage?.takeIf { it.isNotBlank() } ?: "OK",
+                mapOf("Access-Control-Allow-Origin" to "*"),
+                stream
+            )
+        } catch (e: Exception) {
+            null
         }
     }
 
