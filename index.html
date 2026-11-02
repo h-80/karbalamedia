@@ -2693,7 +2693,7 @@ function ytGetPlaylists(channelId) {
 }
 
 // يجلب عناصر قائمة تشغيل (حتى YT_MAX_VIDEOS). notFoundOk: القائمة غير الموجودة تعطي قائمة فارغة بدل خطأ
-async function ytFetchPlaylistItems(playlistId, notFoundOk) {
+async function ytFetchPlaylistItems(playlistId, notFoundOk, limit) {
     const out = [];
     let token = '';
     try {
@@ -2705,7 +2705,7 @@ async function ytFetchPlaylistItems(playlistId, notFoundOk) {
                 out.push({ id: it.contentDetails.videoId, title: t, thumb: ytThumb(it.snippet.thumbnails), date: it.contentDetails.videoPublishedAt || '' });
             });
             token = j.nextPageToken || '';
-        } while (token && out.length < YT_MAX_VIDEOS);
+        } while (token && out.length < (limit || YT_MAX_VIDEOS));
     } catch (e) {
         if (notFoundOk && /playlistNotFound|not\s*found|cannot\s*be\s*found/i.test(String(e && e.message))) return [];
         throw e;
@@ -3117,6 +3117,9 @@ async function renderCurrentView() {
     const grid = $('grid');
     if (!grid) return;
 
+    // أثناء البحث نبقي نتائج البحث ظاهرة (مثلاً عند الرجوع من مشغل فيديو فُتح من النتائج)
+    if (SR.active && SR.query) { performSearch(SR.query, { noLoad: true }); return; }
+
     // عرض قنوات يوتيوب (قوائم التشغيل / الفيديوهات)
     const inYt = !!(window.ytNav && window.ytNav.ch);
     grid.classList.toggle('yt-wide', inYt);
@@ -3194,48 +3197,301 @@ async function renderCurrentView() {
     }
 }
 
-function performSearch(query) {
+// ================== البحث الشامل ==================
+// يبحث في: الأقسام، القنوات (الاسم والوسوم والوصف)، قوائم تشغيل قنوات يوتيوب، وعناوين فيديوهاتها.
+// - الأقسام والقنوات: فوري من بيانات الموقع.
+// - قوائم التشغيل: تُجلب تلقائياً (طلب أو طلبان لكل قناة) وتُخزَّن 6 ساعات.
+// - الفيديوهات: تُجلب عند الضغط على Enter أو زر "ابحث داخل الفيديوهات" (حتى SR_MAX_VIDEOS فيديو لكل قناة) وتُخزَّن 6 ساعات.
+const SR_MAX_VIDEOS = 300;      // أقصى عدد فيديوهات تُفهرس لكل قناة (كل 50 فيديو = وحدة حصة واحدة من YouTube API)
+const SR_SHOW_PLAYLISTS = 120;  // أقصى عدد قوائم تشغيل تُعرض
+const SR_SHOW_VIDEOS = 200;     // أقصى عدد فيديوهات تُعرض
+const SR = { active: false, query: '', videosOn: false, recs: {}, runner: null, prog: null, quota: false, renderTimer: null };
+
+// توحيد النص العربي: يزيل التشكيل والتطويل ويوحّد (أإآ→ا) (ى→ي) (ة→ه) (ؤ→و) (ئ→ي) والأرقام الهندية
+function srNorm(s) {
+    return String(s === null || s === undefined ? '' : s)
+        .normalize('NFKC')
+        .toLowerCase()
+        .replace(/[ً-ٰٟـ]/g, '')
+        .replace(/[أإآٱ]/g, 'ا')
+        .replace(/ى/g, 'ي')
+        .replace(/ة/g, 'ه')
+        .replace(/ؤ/g, 'و')
+        .replace(/ئ/g, 'ي')
+        .replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 0x0660))
+        .replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 0x06F0))
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+function srHas(normText, terms) { return terms.every(t => normText.includes(t)); }
+
+function srClear() {
+    SR.active = false;
+    SR.query = '';
+    clearTimeout(SR.renderTimer);
+    const inp = $('headerSearch');
+    if (inp) inp.value = '';
+}
+
+// سلسلة الأقسام الأب لقسم (لتصحيح مسار التنقل عند فتح قسم من نتائج البحث)
+function srAncestors(cat) {
+    const chain = [];
+    let pid = normalizeParentId(cat && cat.parentId);
+    let guard = 0;
+    while (pid && categoriesCache[pid] && guard++ < 20) {
+        chain.unshift(String(pid));
+        pid = normalizeParentId(categoriesCache[pid].parentId);
+    }
+    return chain;
+}
+
+function srChannelText(ch) {
+    const parts = [ch.name, ch.tags, ch.description, ch.desc, ch.title];
+    parseChannelLinks(ch).forEach(l => parts.push(l.label));
+    return srNorm(parts.filter(x => x !== null && x !== undefined).map(x => (typeof x === 'object' ? Object.values(x).join(' ') : String(x))).join(' '));
+}
+
+function srChannelCats(ch) {
+    return getChannelCategoryIds(ch).map(id => categoriesCache[id] && categoriesCache[id].name).filter(Boolean).join(' · ');
+}
+
+// قراءة كاش يوتيوب الموجود (من التصفح السابق) دون أي طلب
+function srPeek(key) {
+    try {
+        const raw = localStorage.getItem('yt:' + key);
+        if (raw) { const o = JSON.parse(raw); if (Date.now() - o.t < YT_TTL) return o.v; }
+    } catch (e) {}
+    return null;
+}
+
+function srTargets() {
+    const out = [];
+    (channelsCache || []).forEach(ch => {
+        const link = ytChannelLinkOf(ch);
+        if (link) out.push({ ch, link });
+    });
+    return out;
+}
+
+async function srLoadPlaylists(info) {
+    if (info.pl) return [{ id: info.pl, title: info.title || '', thumb: info.thumb || '', count: null }];
+    const list = await ytGetPlaylists(info.id);
+    return list.map(p => ({ id: p.id, title: p.title, thumb: p.thumb, count: p.count }));
+}
+
+async function srLoadVideos(info) {
+    const pid = info.pl || (/^UC/.test(info.id) ? 'UULF' + info.id.slice(2) : '');
+    if (!pid) return [];
+    // إن كانت القائمة محمّلة سابقاً أثناء التصفح نستخدمها مجاناً
+    const peek = srPeek('vid:' + pid);
+    if (peek && peek.length) return peek.map(v => ({ id: v.id, title: v.title, date: v.date || '' }));
+    const list = await ytCached('srv:' + pid, async () => {
+        const items = await ytFetchPlaylistItems(pid, true, SR_MAX_VIDEOS);
+        return items.map(v => ({ id: v.id, title: v.title, date: v.date }));
+    });
+    return list;
+}
+
+async function srEnsure(t, wantVideos) {
+    const key = t.ch.id;
+    const rec = SR.recs[key] || (SR.recs[key] = { ch: t.ch, info: null, pls: null, vids: null });
+    if (!rec.info) rec.info = await ytResolveChannelLink(t.link);
+    if (!rec.pls) rec.pls = (await srLoadPlaylists(rec.info)).map(p => Object.assign({ n: srNorm(p.title) }, p));
+    if (wantVideos && !rec.vids) rec.vids = (await srLoadVideos(rec.info)).map(v => Object.assign({ n: srNorm(v.title) }, v));
+}
+
+function srLoadAll() {
+    if (SR.runner) return SR.runner;
+    const wantVideos = SR.videosOn;
+    const targets = srTargets();
+    if (!targets.length) return Promise.resolve();
+    SR.prog = { done: 0, total: targets.length };
+    let i = 0;
+    const worker = async () => {
+        while (i < targets.length && !SR.quota) {
+            const t = targets[i++];
+            try { await srEnsure(t, wantVideos); }
+            catch (e) {
+                if (/quota|rateLimit|limit exceeded/i.test(String(e && e.message))) SR.quota = true;
+            }
+            SR.prog.done++;
+            srScheduleRender();
+        }
+    };
+    SR.runner = Promise.all([worker(), worker(), worker(), worker()]).then(() => {}, () => {}).then(() => {
+        SR.runner = null;
+        SR.prog = null;
+        srScheduleRender(true);
+        // إذا طُلب البحث في الفيديوهات أثناء تحميل القوائم نكمل مرحلة الفيديوهات
+        if (SR.videosOn && !wantVideos && !SR.quota) srLoadAll();
+    });
+    return SR.runner;
+}
+
+function srScheduleRender(now) {
+    if (!SR.active) return;
+    clearTimeout(SR.renderTimer);
+    SR.renderTimer = setTimeout(() => { if (SR.active && SR.query) performSearch(SR.query, { noLoad: true }); }, now ? 0 : 500);
+}
+
+function srHeader(text) {
+    const d = document.createElement('div');
+    d.className = 'yt-title';
+    d.textContent = text;
+    return d;
+}
+
+function srStatusEl(videosLoadedCount) {
+    const d = document.createElement('div');
+    d.className = 'empty-section-msg';
+    d.style.padding = '12px 20px';
+    d.style.fontSize = '13px';
+    const total = srTargets().length;
+    if (SR.quota) {
+        d.textContent = 'توقف البحث داخل يوتيوب لأن حصة الاستخدام اليومية لمفتاح يوتيوب انتهت. نتائج الأقسام والقنوات والبيانات المحمّلة سابقاً ما زالت تعمل.';
+        return d;
+    }
+    if (SR.prog) {
+        d.textContent = 'جاري البحث داخل قنوات يوتيوب (' + SR.prog.done + '/' + SR.prog.total + ')...';
+        return d;
+    }
+    if (total && !SR.videosOn) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = 'ابحث أيضاً داخل عناوين الفيديوهات';
+        b.style.cssText = 'background:rgba(255,255,255,0.14);color:#fff;border:1px solid rgba(255,255,255,0.25);border-radius:12px;padding:10px 16px;font-size:14px;font-weight:700;cursor:pointer;';
+        b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); SR.videosOn = true; performSearch(SR.query); };
+        d.appendChild(b);
+        return d;
+    }
+    if (total && SR.videosOn) d.textContent = 'تم البحث في ' + videosLoadedCount + ' فيديو من قنوات يوتيوب';
+    else return null;
+    return d;
+}
+
+function performSearch(query, opts) {
+    opts = opts || {};
     const grid = $('grid');
     if (!grid) return;
-    const q = String(query || '').trim().toLowerCase();
-    if (!q) { 
-        renderCurrentView(); 
-        return; 
-    }
-    grid.innerHTML = '';
-    const categories = Object.values(categoriesCache || {}).filter(c => (c.name || '').toLowerCase().includes(q));
-    const channels = (channelsCache || []).filter(ch => (ch.name || '').toLowerCase().includes(q) || (ch.tags || '').toString().toLowerCase().includes(q));
+    const raw = String(query || '').trim();
+    const terms = srNorm(raw).split(' ').filter(Boolean);
+    if (!terms.length) { srClear(); renderCurrentView(); return; }
 
-    if (!categories.length && !channels.length) {
-        grid.innerHTML = '<div class="empty-section-msg">لم يتم العثور على نتائج</div>';
-        return;
+    SR.active = true;
+    SR.query = raw;
+    if (opts.enter) SR.videosOn = true;
+    if (!opts.noLoad) {
+        clearTimeout(SR.loadTimer);
+        SR.loadTimer = setTimeout(() => { if (SR.active) srLoadAll(); }, opts.enter ? 0 : 500);
     }
 
-    if (categories.length) {
-        const header = document.createElement('div');
-        header.className = 'empty-section-msg';
-        header.textContent = 'الأقسام المطابقة';
-        grid.appendChild(header);
-        categories.forEach(cat => {
-            grid.appendChild(createCategoryCard(cat));
+    const phrase = terms.join(' ');
+    const rank = (a, b) => (b.n.includes(phrase) ? 1 : 0) - (a.n.includes(phrase) ? 1 : 0);
+
+    // 1) الأقسام
+    const cats = Object.values(categoriesCache || {}).filter(c => srHas(srNorm(c.name), terms));
+
+    // 2) القنوات + قوائم التشغيل + الفيديوهات
+    const chans = [];
+    const chanSeen = new Set();
+    (channelsCache || []).forEach(ch => {
+        const rec = SR.recs[ch.id];
+        const text = srChannelText(ch) + (rec && rec.info ? ' ' + srNorm(rec.info.title) : '');
+        if (srHas(text, terms)) { chans.push(ch); chanSeen.add(ch.id); }
+    });
+
+    const plHits = [];
+    const vidHits = [];
+    const plSeen = new Set();
+    const vidSeen = new Set();
+    let videosIndexed = 0;
+    Object.keys(SR.recs).forEach(k => {
+        const rec = SR.recs[k];
+        if (!rec || !rec.info) return;
+        const chTitle = rec.info.title || rec.ch.name || '';
+        (rec.pls || []).forEach(p => {
+            const key = rec.info.id + '|' + p.id;
+            if (plSeen.has(key) || !srHas(p.n, terms)) return;
+            plSeen.add(key);
+            plHits.push({ p, rec, chTitle, n: p.n });
+        });
+        if (rec.vids) {
+            videosIndexed += rec.vids.length;
+            rec.vids.forEach(v => {
+                if (vidSeen.has(v.id) || !srHas(v.n, terms)) return;
+                vidSeen.add(v.id);
+                vidHits.push({ v, rec, chTitle, n: v.n });
+            });
+        }
+    });
+    plHits.sort(rank);
+    vidHits.sort(rank);
+
+    const frag = document.createDocumentFragment();
+    grid.classList.remove('yt-shorts');
+    const status = srStatusEl(videosIndexed);
+    if (status) frag.appendChild(status);
+
+    if (cats.length) {
+        frag.appendChild(srHeader('الأقسام (' + cats.length + ')'));
+        cats.forEach(cat => {
+            const card = createCategoryCard(cat);
+            // عند فتح قسم من النتائج نخرج من أي عرض يوتيوب ونضبط مسار الأقسام الصحيح
+            card.addEventListener('click', () => { srClear(); window.ytNav = null; currentStack = srAncestors(cat); }, true);
+            frag.appendChild(card);
         });
     }
 
-    if (channels.length) {
-        const header = document.createElement('div');
-        header.className = 'empty-section-msg';
-        header.textContent = 'القنوات المطابقة';
-        grid.appendChild(header);
-        channels.forEach(ch => {
+    if (chans.length) {
+        frag.appendChild(srHeader('القنوات (' + chans.length + ')'));
+        chans.forEach(ch => {
             const card = document.createElement('div');
             card.className = 'card channel-card';
             card.innerHTML = `<img src="${escapeHtml(getChannelCardImage(ch))}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${escapeHtml(ch.name)}</div>`;
-            card.onclick = () => selectChannel(ch);
+            card.onclick = (e) => {
+                if (e) e.preventDefault();
+                if (ytChannelLinkOf(ch)) { srClear(); window.ytNav = null; }
+                selectChannel(ch);
+            };
             ytEnhanceCard(card, ch);
-            grid.appendChild(card);
+            frag.appendChild(card);
         });
     }
+
+    if (plHits.length) {
+        frag.appendChild(srHeader('قوائم التشغيل (' + plHits.length + ')'));
+        plHits.slice(0, SR_SHOW_PLAYLISTS).forEach(h => {
+            const sub = h.chTitle + (h.p.count != null ? ' • ' + h.p.count + ' فيديو' : '');
+            frag.appendChild(ytMakeCard(h.p.thumb, h.p.title, sub, () => {
+                srClear();
+                window.ytNav = { ch: h.rec.info.id, pl: h.p.id, solo: !!h.rec.info.pl };
+                pushState();
+                renderCurrentView();
+                window.scrollTo(0, 0);
+            }));
+        });
+    }
+
+    if (vidHits.length) {
+        frag.appendChild(srHeader('الفيديوهات (' + vidHits.length + (vidHits.length > SR_SHOW_VIDEOS ? '، تُعرض أول ' + SR_SHOW_VIDEOS : '') + ')'));
+        vidHits.slice(0, SR_SHOW_VIDEOS).forEach(h => {
+            const thumb = 'https://i.ytimg.com/vi/' + h.v.id + '/mqdefault.jpg';
+            frag.appendChild(ytMakeCard(thumb, h.v.title, h.chTitle, () => ytPlayVideo({ id: h.v.id, title: h.v.title, thumb })));
+        });
+    }
+
+    if (!cats.length && !chans.length && !plHits.length && !vidHits.length) {
+        const d = document.createElement('div');
+        d.className = 'empty-section-msg';
+        d.textContent = (SR.prog || (!SR.videosOn && srTargets().length)) ? 'لا توجد نتائج حتى الآن...' : 'لم يتم العثور على نتائج';
+        frag.appendChild(d);
+    }
+
+    grid.innerHTML = '';
+    grid.classList.add('yt-wide');
+    grid.appendChild(frag);
 }
+// ================== نهاية البحث الشامل ==================
 
 let playerControlsTimer = null;
 function showPlayerControls() {
@@ -3462,12 +3718,12 @@ document.addEventListener('DOMContentLoaded', () => {
             e.stopPropagation();
             headerSearch.classList.toggle('visible');
             if (headerSearch.classList.contains('visible')) { headerSearch.focus(); headerSearch.select(); }
-            else { headerSearch.value = ''; renderCurrentView(); }
+            else { srClear(); renderCurrentView(); }
         });
         headerSearch.addEventListener('input', (e) => performSearch(e.target.value));
         headerSearch.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') { headerSearch.classList.remove('visible'); headerSearch.value = ''; renderCurrentView(); }
-            if (e.key === 'Enter') { performSearch(headerSearch.value); }
+            if (e.key === 'Escape') { headerSearch.classList.remove('visible'); srClear(); renderCurrentView(); }
+            if (e.key === 'Enter') { performSearch(headerSearch.value, { enter: true }); headerSearch.blur(); }
         });
         document.addEventListener('click', (ev) => { if (!headerSearch.contains(ev.target) && ev.target !== searchToggle) { headerSearch.classList.remove('visible'); } });
     }
@@ -3526,6 +3782,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (homeNav && matchesNav) {
         const goToHome = () => {
             // إفراغ الستاك والعودة لعرض الأقسام الجذرية
+            srClear();
             currentStack = [];
             currentChannelId = null;
             window.ytNav = null;
