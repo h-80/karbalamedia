@@ -2983,6 +2983,65 @@ function ytGetLiveNow(channelId) {
     }, YT_LIVE_TTL);
 }
 
+// ===== عرض قسم "البث المباشر" مباشرة ككروت بثوث (بدون كروت القنوات)، مع تحديث تلقائي =====
+const YT_LIVE_REFRESH = 150 * 1000; // أطول قليلاً من كاش البث حتى تُجلب بيانات جديدة في كل تحديث
+let ytLiveToken = 0;
+let ytLiveTimer = null;
+let ytLiveSig = '';
+
+function ytStopLiveRefresh() { if (ytLiveTimer) { clearInterval(ytLiveTimer); ytLiveTimer = null; } }
+
+async function renderLiveSection(currentId, subs, channels, silent) {
+    const grid = $('grid');
+    if (!grid) return;
+    const token = ++ytLiveToken;
+    if (!silent) ytMessage(grid, 'جاري تحميل البث المباشر...');
+
+    const ytChs = channels.filter(ch => ytChannelLinkOf(ch));
+    const otherChs = channels.filter(ch => !ytChannelLinkOf(ch));
+    const results = await Promise.all(ytChs.map(async ch => {
+        try {
+            const info = await ytResolveChannelLink(ytChannelLinkOf(ch));
+            if (info.pl) return [];
+            const live = await ytGetLiveNow(info.id);
+            return live.map(v => Object.assign({}, v, { chTitle: info.title || ch.name }));
+        } catch (e) { return []; }
+    }));
+    // انتقل المستخدم لمكان آخر أثناء الجلب
+    if (token !== ytLiveToken) return;
+
+    const seen = new Set();
+    const lives = [].concat(...results).filter(v => !seen.has(v.id) && seen.add(v.id));
+    const sig = lives.map(v => v.id).join(',');
+    if (silent && sig === ytLiveSig) return; // لا تغيير: لا نعيد الرسم حتى لا يقفز التمرير
+    ytLiveSig = sig;
+
+    const frag = document.createDocumentFragment();
+    subs.forEach(sub => frag.appendChild(createCategoryCard(sub)));
+    otherChs.forEach(ch => {
+        const card = document.createElement('div');
+        card.className = 'card channel-card';
+        card.innerHTML = `<img src="${escapeHtml(getChannelCardImage(ch))}" onerror="this.src='${DEFAULT_IMAGE}'"><div class="card-title">${escapeHtml(ch.name)}</div>`;
+        card.onclick = (e) => { if (e) e.preventDefault(); selectChannel(ch); };
+        frag.appendChild(card);
+    });
+    lives.forEach(v => frag.appendChild(ytMakeCard(v.thumb, v.title, '🔴 ' + v.chTitle, () => ytPlayVideo(v))));
+
+    grid.innerHTML = '';
+    if (!frag.childNodes.length) ytMessage(grid, 'لا يوجد بث مباشر حالياً');
+    else grid.appendChild(frag);
+
+    // تحديث تلقائي: ما انتهى يختفي وما بدأ يظهر، ما دام المستخدم باقياً في نفس القسم
+    ytStopLiveRefresh();
+    ytLiveTimer = setInterval(() => {
+        const top = currentStack && currentStack.length ? String(currentStack[currentStack.length - 1]) : null;
+        const stillHere = top === String(currentId) && !currentChannelId && !(window.ytNav && window.ytNav.ch) && !(SR.active && SR.query) && !document.hidden;
+        if (top !== String(currentId) || currentChannelId || (window.ytNav && window.ytNav.ch)) { ytStopLiveRefresh(); return; }
+        if (!stillHere) return;
+        renderLiveSection(currentId, subs, channels, true);
+    }, YT_LIVE_REFRESH);
+}
+
 function ytMessage(grid, text) {
     grid.innerHTML = '';
     const d = document.createElement('div');
@@ -3227,6 +3286,14 @@ async function renderCurrentView() {
         ytEnhanceCard(card, ch);
         frag.appendChild(card);
     });
+
+    // قسم البث المباشر: كروت البثوث الجارية فقط بدل كروت القنوات
+    if (ytIsLiveCategoryName(categoriesCache[currentId].name) && channels.some(ch => ytChannelLinkOf(ch))) {
+        ytLiveSig = '';
+        renderLiveSection(currentId, subs, channels, false);
+        return;
+    }
+    ytStopLiveRefresh();
 
     grid.innerHTML = '';
     if (subs.length === 0 && channels.length === 0) {
