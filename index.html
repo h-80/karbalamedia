@@ -2604,19 +2604,19 @@ function ytChannelLinkOf(ch) {
     return l ? l.url : null;
 }
 
-async function ytCachedRaw(key, loader) {
+async function ytCachedRaw(key, loader, ttl) {
     const k = 'yt:' + key;
     try {
         const raw = localStorage.getItem(k);
-        if (raw) { const o = JSON.parse(raw); if (Date.now() - o.t < YT_TTL) return o.v; }
+        if (raw) { const o = JSON.parse(raw); if (Date.now() - o.t < (ttl || YT_TTL)) return o.v; }
     } catch (e) {}
     const v = await loader();
     try { localStorage.setItem(k, JSON.stringify({ t: Date.now(), v })); } catch (e) {}
     return v;
 }
-function ytCached(key, loader) {
+function ytCached(key, loader, ttl) {
     if (ytInflight[key]) return ytInflight[key];
-    const p = ytCachedRaw(key, loader).finally(() => { delete ytInflight[key]; });
+    const p = ytCachedRaw(key, loader, ttl).finally(() => { delete ytInflight[key]; });
     ytInflight[key] = p;
     return p;
 }
@@ -2957,6 +2957,32 @@ function ytCloseShortsViewer(viaButton) {
     ytSv.pushed = false;
 }
 
+// ===== قسم "البث المباشر": يعرض البثوث الجارية فقط من القناة (باقي الأقسام بدون تغيير) =====
+const YT_LIVE_TTL = 2 * 60 * 1000; // البث المباشر يتغير بسرعة: كاش دقيقتين فقط
+function ytIsLiveCategoryName(name) {
+    const n = srNorm(name);
+    return n === 'البث المباشر' || n === 'بث مباشر' || n === 'البث الحي' || n === 'live';
+}
+// هل المستخدم الآن داخل قسم "البث المباشر" (أو أي قسم فرعي تحته)؟
+function ytInLiveSection() {
+    return (currentStack || []).some(id => categoriesCache[id] && ytIsLiveCategoryName(categoriesCache[id].name));
+}
+// البثوث الجارية الآن: قائمة البثوث الجاهزة UULV (طلب واحد) ثم تصفية الجاري منها فقط (طلب واحد)
+function ytGetLiveNow(channelId) {
+    if (!/^UC/.test(channelId)) return Promise.resolve([]);
+    return ytCached('live:' + channelId, async () => {
+        let items;
+        try { items = await ytFetchPlaylistItems('UULV' + channelId.slice(2), true, 50); }
+        catch (e) { return []; }
+        const ids = items.map(v => v.id).slice(0, 50);
+        if (!ids.length) return [];
+        const j = await ytApi('videos', { part: 'snippet', id: ids.join(',') });
+        return (j.items || [])
+            .filter(v => v.snippet && v.snippet.liveBroadcastContent === 'live')
+            .map(v => ({ id: v.id, title: v.snippet.title, thumb: ytThumb(v.snippet.thumbnails), date: v.snippet.publishedAt || '' }));
+    }, YT_LIVE_TTL);
+}
+
 function ytMessage(grid, text) {
     grid.innerHTML = '';
     const d = document.createElement('div');
@@ -2997,6 +3023,19 @@ async function renderYouTubeView() {
     const shortsP = nav.pl ? null : ytGetShortsPreview(nav.ch).catch(() => []);
     try {
         const ch = await ytGetChannel(nav.ch);
+        // قسم البث المباشر: البثوث الجارية فقط من هذه القناة
+        if (!nav.pl && ytInLiveSection()) {
+            const live = await ytGetLiveNow(nav.ch);
+            if (token !== ytRenderToken) return;
+            if (!live.length) { ytMessage(grid, 'لا يوجد بث مباشر حالياً في هذه القناة'); return; }
+            const lf = document.createDocumentFragment();
+            if (ch.banner) lf.appendChild(ytBannerEl(ch.banner));
+            lf.appendChild(ytTitleBar('البث المباشر - ' + ch.title));
+            live.forEach(v => lf.appendChild(ytMakeCard(v.thumb, v.title, '🔴 مباشر الآن', () => ytPlayVideo(v))));
+            grid.innerHTML = '';
+            grid.appendChild(lf);
+            return;
+        }
         const realPls = await ytGetPlaylists(nav.ch);
         const shorts = shortsP ? await shortsP : [];
         if (token !== ytRenderToken) return;
